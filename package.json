@@ -1,0 +1,50 @@
+{
+  "name": "rajjo",
+  "version": "1.0.0",
+  "description": "Local-First Autonomous AI Desktop Agent",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n \"BACKEND,FRONTEND,ELECTRON\" -c \"cyan,magenta,green\" \"npm run backend:dev\" \"npm run frontend:dev\" \"wait-on http://127.0.0.1:8000/health && wait-on http://localhost:5173 && npm run electron:dev\"",
+    "backend:dev": "node scripts/backend_dev.js",
+    "frontend:dev": "cd frontend && npm run dev",
+    "electron:dev": "electron .",
+    "build:frontend": "cd frontend && npm run build",
+    "build:backend": "node scripts/build_backend.js",
+    "test": "node scripts/run_test.js",
+    "dist": "npm run build:frontend && node scripts/build_backend.js && electron-builder"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "wait-on": "^8.0.2"
+  },
+  "build": {
+    "appId": "com.rajjo.ai",
+    "productName": "Rajjo",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "assets/logo.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "extraResources": [
+      {
+        "from": "backend/dist/rajjo_backend.exe",
+        "to": "bin/rajjo_backend.exe"
+      }
+    ],
+    "files": [
+      "electron/**/*",
+      "frontend/dist/**/*",
+      "assets/**/*"
+    ]
+  }
+}

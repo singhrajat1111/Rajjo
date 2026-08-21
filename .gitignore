@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Build and distribution output
+frontend/dist/
+dist/
+build/
+backend/dist/
+backend/build/
+*.exe
+*.msi
+
+# Python cache and tooling
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and runtime files
+*.log
+*.pid
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/*.code-workspace

@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+langgraph
+langchain
+langchain-openai
+langchain-community
+pydantic
+python-dotenv
+duckduckgo-search
+playwright
+pygetwindow
+pywinauto
+chromadb
+llama-cpp-python
