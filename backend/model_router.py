@@ -1,17 +1,18 @@
 import os
 import json
 import re
-from pathlib import Path
-from typing import Any, Dict, Optional, List, Tuple
 import urllib.request
 import urllib.error
+from pathlib import Path
+from typing import Any, Dict, Optional, List, Tuple
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
+
 try:
-    from backend.config import load_settings, get_secret
+    from backend.config import load_settings, get_secret, get_provider_config
 except ImportError:
-    from config import load_settings, get_secret
+    from config import load_settings, get_secret, get_provider_config
 
 
 class DirectGGUFEngine:
@@ -79,8 +80,9 @@ class ModelRouter:
     """
     Unified LLM Factory and Universal API Accepter.
     Supports:
-    - Universal OpenAI-compatible APIs (OpenAI, Groq, OpenRouter, DeepSeek, Together, LM Studio, vLLM, Ollama, etc.)
+    - Universal OpenAI-compatible APIs (OpenAI, Groq, OpenRouter, DeepSeek, Together, LM Studio, vLLM, Ollama, Anthropic, Gemini, etc.)
     - Local Inference: Ollama (with robust multi-host discovery and local model tag listing)
+    - Ollama Cloud: Browse and install models from Ollama's model library
     - Rajjo Direct GGUF Engine: Run any .gguf file directly from SSD/HDD/USB with no directory setup required.
     """
 
@@ -100,8 +102,8 @@ class ModelRouter:
     def get_effective_config(override_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         settings = load_settings()
         config = {
-            "provider": settings.get("active_provider", "openai"),
-            "model_id": settings.get("active_model_id", "gpt-4o"),
+            "provider": settings.get("active_provider", "universal"),
+            "model_id": settings.get("active_model_id", "deepseek-chat"),
             "base_url": settings.get("custom_base_url", ""),
             "custom_base_url": settings.get("custom_base_url", ""),
             "ollama_base_url": settings.get("ollama_base_url", "http://localhost:11434"),
@@ -129,7 +131,7 @@ class ModelRouter:
     @staticmethod
     def get_llm(model_config: Optional[Dict[str, Any]] = None):
         cfg = ModelRouter.get_effective_config(model_config)
-        provider = (cfg.get("provider") or "openai").lower()
+        provider = (cfg.get("provider") or "universal").lower()
         model_id = cfg.get("model_id") or ""
 
         # 1. Direct In-Process GGUF Engine
@@ -143,14 +145,14 @@ class ModelRouter:
         elif provider == "ollama":
             base_url = cfg.get("ollama_base_url") or cfg.get("base_url") or "http://localhost:11434"
             base_url_norm = ModelRouter.normalize_base_url(base_url) or "http://localhost:11434/v1"
-            
+
             # If model_id not provided, try detecting installed models
-            if not model_id or model_id in ("gpt-4o", "default"):
+            if not model_id or model_id in ("gpt-4o", "default", "deepseek-chat"):
                 _, installed_models, _ = ModelRouter.detect_ollama(base_url)
                 if installed_models:
                     model_id = installed_models[0]
                 else:
-                    model_id = "llama3"
+                    model_id = "llama3.2"
 
             return ChatOpenAI(
                 model=model_id,
@@ -191,8 +193,59 @@ class ModelRouter:
                 streaming=True
             )
 
-        # 5. Universal API Accepter (DeepSeek, OpenRouter, Together, LM Studio, vLLM, Mistral, Any Custom Endpoint)
-        elif provider in ("custom", "universal", "openrouter", "deepseek", "together", "anthropic"):
+        # 5. Anthropic (via OpenAI-compatible proxy or direct)
+        elif provider == "anthropic":
+            api_key = cfg.get("api_key") or get_secret("ANTHROPIC_API_KEY")
+            base_url = ModelRouter.normalize_base_url(cfg.get("base_url")) or None
+            if not api_key:
+                raise ValueError("Anthropic API key is missing. Please configure it in Models or Settings.")
+            if not model_id:
+                model_id = "claude-3-5-sonnet-20241022"
+            # Use OpenAI-compatible endpoint for Anthropic
+            return ChatOpenAI(
+                model=model_id,
+                api_key=api_key,
+                base_url=base_url or "https://api.anthropic.com/v1/",
+                temperature=0.3,
+                streaming=True
+            )
+
+        # 6. Google Gemini
+        elif provider == "gemini":
+            api_key = cfg.get("api_key") or get_secret("GEMINI_API_KEY")
+            if not api_key:
+                raise ValueError("Google Gemini API key is missing. Please configure it in Models or Settings.")
+            if not model_id:
+                model_id = "gemini-1.5-pro"
+            return ChatOpenAI(
+                model=model_id,
+                api_key=api_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                temperature=0.3,
+                streaming=True
+            )
+
+        # 7. OpenRouter
+        elif provider == "openrouter":
+            api_key = cfg.get("api_key") or get_secret("OPENROUTER_API_KEY")
+            if not api_key:
+                raise ValueError("OpenRouter API key is missing. Please configure it in Models or Settings.")
+            if not model_id:
+                model_id = "anthropic/claude-3.5-sonnet"
+            return ChatOpenAI(
+                model=model_id,
+                api_key=api_key,
+                base_url="https://openrouter.ai/api/v1",
+                temperature=0.3,
+                streaming=True,
+                default_headers={
+                    "HTTP-Referer": "https://rajjo.ai",
+                    "X-Title": "Rajjo"
+                }
+            )
+
+        # 8. Universal API Accepter (DeepSeek, OpenRouter, Together, LM Studio, vLLM, Mistral, Any Custom Endpoint)
+        elif provider in ("custom", "universal", "deepseek", "together", "mistral", "xai"):
             api_key = cfg.get("api_key") or get_secret("CUSTOM_API_KEY") or "none"
             raw_url = cfg.get("base_url") or cfg.get("custom_base_url") or "http://localhost:1234/v1"
             base_url = ModelRouter.normalize_base_url(raw_url)
@@ -244,7 +297,7 @@ class ModelRouter:
                         name = m.get("name") or m.get("model") or ""
                         if name:
                             model_names.append(name)
-                    
+
                     if model_names:
                         return True, model_names, f"Ollama connected at {host} ({len(model_names)} models installed)"
                     return True, [], f"Ollama is running at {host}, but no models are downloaded yet."
@@ -253,6 +306,37 @@ class ModelRouter:
                 continue
 
         return False, [], f"Ollama unreachable on {', '.join(candidate_hosts)}. Error: {last_error}"
+
+    @staticmethod
+    def fetch_ollama_cloud_models() -> Tuple[bool, List[Dict], str]:
+        """
+        Fetch available models from Ollama Cloud library.
+        Returns (success, models_list, message)
+        """
+        try:
+            # Ollama library API
+            library_url = "https://ollama.com/library?format=json"
+            req = urllib.request.Request(library_url, headers={"User-Agent": "Rajjo/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            models = data.get("models", [])
+            # Extract relevant info
+            model_list = []
+            for m in models:
+                model_list.append({
+                    "name": m.get("name", ""),
+                    "description": m.get("description", ""),
+                    "tags": m.get("tags", []),
+                    "size": m.get("size", ""),
+                    "pull_count": m.get("pull_count", 0),
+                    "updated_at": m.get("updated_at", ""),
+                })
+
+            return True, model_list, f"Found {len(model_list)} models in Ollama Cloud Library"
+
+        except Exception as e:
+            return False, [], f"Failed to fetch Ollama Cloud models: {str(e)}"
 
     @staticmethod
     def validate_gguf(path_str: str) -> Dict[str, Any]:
@@ -273,12 +357,33 @@ class ModelRouter:
             size_bytes = p.stat().st_size
             size_gb = round(size_bytes / (1024 ** 3), 2)
 
+            # Try to read GGUF metadata if possible
+            arch = None
+            quantization = None
+            try:
+                from llama_cpp import Llama
+                # Quick metadata read
+                llm = Llama(model_path=str(p), n_ctx=512, verbose=False)
+                # We can't easily get arch/quant without loading, but file size gives hints
+                if size_gb < 2:
+                    quantization = "Q4_K_M or similar (small)"
+                elif size_gb < 5:
+                    quantization = "Q4_K_M / Q5_K_M"
+                elif size_gb < 10:
+                    quantization = "Q6_K / Q8_0"
+                else:
+                    quantization = "High precision / F16"
+            except Exception:
+                pass
+
             return {
                 "valid": True,
                 "path": str(p),
                 "filename": p.name,
                 "size_gb": size_gb,
                 "size_bytes": size_bytes,
+                "arch": arch,
+                "quantization": quantization,
                 "error": None
             }
         except Exception as e:

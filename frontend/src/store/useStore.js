@@ -4,8 +4,19 @@ const API_BASE = 'http://127.0.0.1:8000';
 
 export const useStore = create((set, get) => ({
   // Navigation
-  activeTab: 'chat', // 'chat' | 'models' | 'tools' | 'memory' | 'settings'
+  activeTab: 'chat', // 'chat' | 'models' | 'tools' | 'memory' | 'mcp' | 'agents' | 'settings'
   setActiveTab: (tab) => set({ activeTab: tab }),
+
+  // UI State
+  sidebarOpen: true,
+  setSidebarOpen: (open) => set({ sidebarOpen: open }),
+  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+  
+  commandPaletteOpen: false,
+  setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+  
+  theme: 'dark', // 'dark' | 'light' | 'system'
+  setTheme: (theme) => set({ theme }),
 
   // Backend Status
   backendOnline: false,
@@ -28,7 +39,7 @@ export const useStore = create((set, get) => ({
   messages: [],
   input: '',
   isProcessing: false,
-  activeActivities: [], // current streaming status/tool badges
+  activeActivities: [],
   setInput: (input) => set({ input }),
   setProcessing: (isProcessing) => set({ isProcessing }),
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
@@ -38,9 +49,10 @@ export const useStore = create((set, get) => ({
 
   // Models State
   modelsData: {
-    active_provider: 'openai',
-    active_model_id: 'gpt-4o',
+    active_provider: 'universal',
+    active_model_id: 'deepseek-chat',
     custom_base_url: '',
+    ollama_base_url: 'http://localhost:11434',
     ollama: { running: false, models: [] },
     gguf: { model_path: '', info: null },
     credentials: {}
@@ -89,9 +101,9 @@ export const useStore = create((set, get) => ({
       return { success: false, message: e.message };
     }
   },
-  detectOllama: async () => {
+  detectOllama: async (baseUrl = 'http://localhost:11434') => {
     try {
-      const res = await fetch(`${API_BASE}/models/ollama`);
+      const res = await fetch(`${API_BASE}/models/ollama?base_url=${encodeURIComponent(baseUrl)}`);
       if (res.ok) {
         const data = await res.json();
         set((state) => ({
@@ -122,6 +134,14 @@ export const useStore = create((set, get) => ({
     } catch (e) {
       return { valid: false, error: e.message };
     }
+  },
+  setOllamaBaseUrl: async (url) => {
+    set((state) => ({
+      modelsData: {
+        ...state.modelsData,
+        ollama_base_url: url
+      }
+    }));
   },
 
   // Tools State
@@ -156,6 +176,76 @@ export const useStore = create((set, get) => ({
     } catch (e) {
       console.error('Error toggling tool:', e);
     }
+  },
+  addCustomTool: async (tool) => {
+    console.log('Add custom tool:', tool);
+  },
+  removeCustomTool: async (name) => {
+    console.log('Remove custom tool:', name);
+  },
+
+  // MCP State
+  mcpServers: [],
+  isLoadingMCP: false,
+  fetchMCPServers: async () => {
+    set({ isLoadingMCP: true });
+    try {
+      const res = await fetch(`${API_BASE}/mcp/servers`);
+      if (res.ok) {
+        const data = await res.json();
+        set({ mcpServers: data.servers || [] });
+      }
+    } catch (e) {
+      console.error('Error fetching MCP servers:', e);
+    } finally {
+      set({ isLoadingMCP: false });
+    }
+  },
+  toggleMCPServer: async (name, enabled) => {
+    try {
+      const res = await fetch(`${API_BASE}/mcp/servers/${name}/${enabled ? 'enable' : 'disable'}`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        set((state) => ({
+          mcpServers: state.mcpServers.map((s) => (s.name === name ? { ...s, status: enabled ? 'connected' : 'disconnected' } : s))
+        }));
+      }
+    } catch (e) {
+      console.error('Error toggling MCP server:', e);
+    }
+  },
+  addMCPServer: async (server) => {
+    try {
+      const res = await fetch(`${API_BASE}/mcp/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(server)
+      });
+      if (res.ok) {
+        await get().fetchMCPServers();
+        return true;
+      }
+    } catch (e) {
+      console.error('Error adding MCP server:', e);
+    }
+    return false;
+  },
+  removeMCPServer: async (name) => {
+    try {
+      const res = await fetch(`${API_BASE}/mcp/servers/${name}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        set((state) => ({
+          mcpServers: state.mcpServers.filter((s) => s.name !== name)
+        }));
+        return true;
+      }
+    } catch (e) {
+      console.error('Error removing MCP server:', e);
+    }
+    return false;
   },
 
   // Memory State
@@ -223,11 +313,25 @@ export const useStore = create((set, get) => ({
       return { success: false };
     }
   },
+  searchSemanticMemory: async (query, limit = 5) => {
+    try {
+      const res = await fetch(`${API_BASE}/memory/semantic/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, limit })
+      });
+      return await res.json();
+    } catch (e) {
+      console.error(e);
+      return { results: [] };
+    }
+  },
 
   // Settings State
   settingsData: {
     settings: {},
-    credentials: {}
+    credentials: {},
+    storage: {}
   },
   fetchSettings: async () => {
     try {
@@ -235,6 +339,9 @@ export const useStore = create((set, get) => ({
       if (res.ok) {
         const data = await res.json();
         set({ settingsData: data });
+        if (data.settings?.theme) {
+          set({ theme: data.settings.theme });
+        }
       }
     } catch (e) {
       console.error('Error fetching settings:', e);
@@ -257,5 +364,66 @@ export const useStore = create((set, get) => ({
       console.error('Error updating settings:', e);
     }
     return false;
-  }
+  },
+
+  // Agent State
+  agents: [],
+  isLoadingAgents: false,
+  fetchAgents: async () => {
+    set({ isLoadingAgents: true });
+    try {
+      const res = await fetch(`${API_BASE}/agents`);
+      if (res.ok) {
+        const data = await res.json();
+        set({ agents: data.agents || [] });
+      }
+    } catch (e) {
+      console.error('Error fetching agents:', e);
+    } finally {
+      set({ isLoadingAgents: false });
+    }
+  },
+  spawnAgent: async (config) => {
+    try {
+      const res = await fetch(`${API_BASE}/agents/spawn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+      if (res.ok) {
+        await get().fetchAgents();
+        return await res.json();
+      }
+    } catch (e) {
+      console.error('Error spawning agent:', e);
+    }
+    return null;
+  },
+  stopAgent: async (id) => {
+    try {
+      const res = await fetch(`${API_BASE}/agents/${id}/stop`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        await get().fetchAgents();
+        return true;
+      }
+    } catch (e) {
+      console.error('Error stopping agent:', e);
+    }
+    return false;
+  },
+  steerAgent: async (id, message) => {
+    try {
+      const res = await fetch(`${API_BASE}/agents/${id}/steer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      });
+      return res.ok;
+    } catch (e) {
+      console.error('Error steering agent:', e);
+    }
+    return false;
+  },
 }));

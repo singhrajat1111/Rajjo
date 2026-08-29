@@ -11,4 +11,8 @@ playwright
 pygetwindow
 pywinauto
 chromadb
-llama-cpp-python
+# llama-cpp-python is installed from the official prebuilt Windows wheel (no MSVC needed).
+# The PyPI release is source-only and would require a C++ compiler to build.
+llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.35/llama_cpp_python-0.3.35-py3-none-win_amd64.whl
+httpx
+aiofiles

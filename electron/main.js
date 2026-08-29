@@ -142,6 +142,17 @@ function createWindow() {
   });
 
   if (isDev) {
+    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+      console.log(`[Renderer Console L${level}] ${message} (${sourceId}:${line})`);
+    });
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+      console.error(`[Renderer Failed Load] ${errorCode} - ${errorDescription} on ${validatedURL}`);
+      const distIndex = path.join(__dirname, '..', 'frontend', 'dist', 'index.html');
+      if (fs.existsSync(distIndex)) {
+        console.log('[Electron] Dev server unreachable; falling back to dist/index.html');
+        mainWindow.loadFile(distIndex);
+      }
+    });
     mainWindow.loadURL('http://localhost:5173');
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'));

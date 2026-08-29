@@ -30,14 +30,16 @@ DB_PATH = DATA_DIR / "rajjo.db"
 CONFIG_PATH = DATA_DIR / "config.json"
 SECRETS_PATH = DATA_DIR / "secrets.json"
 LOGS_DIR = DATA_DIR / "logs"
+SCREENSHOTS_DIR = DATA_DIR / "screenshots"
+MCP_DIR = DATA_DIR / "mcp"
 
-for d in [MEMORY_DIR, VECTOR_STORE_DIR, LOGS_DIR]:
+for d in [MEMORY_DIR, VECTOR_STORE_DIR, LOGS_DIR, SCREENSHOTS_DIR, MCP_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # Default Settings
 DEFAULT_SETTINGS = {
-    "active_provider": "openai",
-    "active_model_id": "gpt-4o",
+    "active_provider": "universal",
+    "active_model_id": "deepseek-chat",
     "custom_base_url": "",
     "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
     "gguf_model_path": "",
@@ -45,7 +47,17 @@ DEFAULT_SETTINGS = {
     "max_iterations": 10,
     "shell_timeout": 30,
     "shell_confirm_destructive": True,
-    "theme": "dark"
+    "theme": "dark",
+    "default_language": "en",
+    "output_format": "markdown",
+    "auto_save_conversations": True,
+    "telemetry_enabled": False,
+    "reduce_motion": False,
+    "ui_density": "comfortable",
+    "accent_color": "brand",
+    "http_proxy": "",
+    "https_proxy": "",
+    "no_proxy": "localhost,127.0.0.1,.local",
 }
 
 def load_settings() -> dict:
@@ -104,10 +116,90 @@ def get_masked_secrets_summary() -> dict:
     groq_key = get_secret("GROQ_API_KEY")
     anthropic_key = get_secret("ANTHROPIC_API_KEY")
     custom_key = get_secret("CUSTOM_API_KEY")
+    gemini_key = get_secret("GEMINI_API_KEY")
+    openrouter_key = get_secret("OPENROUTER_API_KEY")
 
     return {
         "openai": {"configured": bool(openai_key), "masked": mask_key(openai_key)},
         "groq": {"configured": bool(groq_key), "masked": mask_key(groq_key)},
         "anthropic": {"configured": bool(anthropic_key), "masked": mask_key(anthropic_key)},
         "custom": {"configured": bool(custom_key), "masked": mask_key(custom_key)},
+        "gemini": {"configured": bool(gemini_key), "masked": mask_key(gemini_key)},
+        "openrouter": {"configured": bool(openrouter_key), "masked": mask_key(openrouter_key)},
     }
+
+# Provider configurations
+PROVIDER_CONFIGS = {
+    "openai": {
+        "name": "OpenAI",
+        "default_model": "gpt-4o",
+        "models": ["gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini", "o3-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"],
+        "base_url": "https://api.openai.com/v1",
+        "key_env": "OPENAI_API_KEY",
+        "key_secret": "OPENAI_API_KEY",
+    },
+    "anthropic": {
+        "name": "Anthropic",
+        "default_model": "claude-3-5-sonnet-20241022",
+        "models": ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"],
+        "base_url": "https://api.anthropic.com/v1",
+        "key_env": "ANTHROPIC_API_KEY",
+        "key_secret": "ANTHROPIC_API_KEY",
+    },
+    "groq": {
+        "name": "Groq",
+        "default_model": "llama-3.3-70b-versatile",
+        "models": ["llama-3.3-70b-versatile", "llama-3.3-8b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"],
+        "base_url": "https://api.groq.com/openai/v1",
+        "key_env": "GROQ_API_KEY",
+        "key_secret": "GROQ_API_KEY",
+    },
+    "gemini": {
+        "name": "Google Gemini",
+        "default_model": "gemini-1.5-pro",
+        "models": ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"],
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "key_env": "GEMINI_API_KEY",
+        "key_secret": "GEMINI_API_KEY",
+    },
+    "openrouter": {
+        "name": "OpenRouter",
+        "default_model": "anthropic/claude-3.5-sonnet",
+        "models": ["anthropic/claude-3.5-sonnet", "openai/gpt-4o", "meta-llama/llama-3.3-70b-instruct", "mistralai/mistral-large", "google/gemini-pro"],
+        "base_url": "https://openrouter.ai/api/v1",
+        "key_env": "OPENROUTER_API_KEY",
+        "key_secret": "OPENROUTER_API_KEY",
+    },
+    "universal": {
+        "name": "Universal API",
+        "default_model": "deepseek-chat",
+        "models": ["deepseek-chat", "deepseek-coder", "custom"],
+        "base_url": "",
+        "key_env": "CUSTOM_API_KEY",
+        "key_secret": "CUSTOM_API_KEY",
+    },
+    "ollama": {
+        "name": "Local Ollama",
+        "default_model": "llama3.2",
+        "models": [],  # Dynamically populated
+        "base_url": "http://localhost:11434",
+        "key_env": "",
+        "key_secret": "",
+    },
+    "gguf": {
+        "name": "Direct GGUF",
+        "default_model": "rajjo-direct-gguf",
+        "models": [],
+        "base_url": "",
+        "key_env": "",
+        "key_secret": "",
+    },
+}
+
+def get_provider_config(provider: str) -> dict:
+    """Get configuration for a provider."""
+    return PROVIDER_CONFIGS.get(provider, PROVIDER_CONFIGS["universal"])
+
+def get_all_providers() -> list:
+    """Get list of all available providers."""
+    return list(PROVIDER_CONFIGS.keys())

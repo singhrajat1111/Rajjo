@@ -19,16 +19,17 @@ import asyncio
 
 from backend.config import (
     DATA_DIR, load_settings, save_settings,
-    get_secret, save_secret, get_masked_secrets_summary
+    get_secret, save_secret, get_masked_secrets_summary, get_provider_config, get_all_providers
 )
 from backend.model_router import router, ModelRouter
 from backend.tools.registry import registry
 from backend.memory.episodic import episodic
 from backend.memory.semantic import semantic
+from backend.memory.reflector import reflector_service
 from backend.graph import agent_graph
 from langchain_core.messages import HumanMessage, AIMessage
 
-app = FastAPI(title="Rajjo Backend", version="1.0.0")
+app = FastAPI(title="Rajjo Backend", version="2.0.0")
 
 # Enable CORS for Vite and Electron
 app.add_middleware(
@@ -53,6 +54,7 @@ class ModelSelectRequest(BaseModel):
     provider: str
     model_id: Optional[str] = None
     custom_base_url: Optional[str] = None
+    ollama_base_url: Optional[str] = None
     gguf_model_path: Optional[str] = None
     api_key: Optional[str] = None
 
@@ -75,7 +77,22 @@ class SettingsUpdateRequest(BaseModel):
     theme: Optional[str] = None
     openai_api_key: Optional[str] = None
     groq_api_key: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
     custom_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
+
+class MCPServerRequest(BaseModel):
+    name: str
+    command: str
+    args: List[str] = []
+    env: Dict[str, str] = {}
+
+class AgentSpawnRequest(BaseModel):
+    role: str
+    task: str
+    background: bool = True
+    delegation: bool = False
 
 # ----------------- Health Endpoint -----------------
 
@@ -86,9 +103,9 @@ async def health():
     return {
         "status": "ok",
         "agent": "Rajjo",
-        "version": "1.0.0",
-        "active_provider": settings.get("active_provider", "openai"),
-        "active_model_id": settings.get("active_model_id", "gpt-4o"),
+        "version": "2.0.0",
+        "active_provider": settings.get("active_provider", "universal"),
+        "active_model_id": settings.get("active_model_id", "deepseek-chat"),
         "data_dir": str(DATA_DIR),
         "tools_active": len(registry.get_active_tools()),
         "has_memory": episodic_tasks > 0
@@ -202,11 +219,13 @@ async def get_models():
     settings = load_settings()
     ollama_running, ollama_models, ollama_msg = ModelRouter.detect_ollama(settings.get("ollama_base_url", "http://localhost:11434"))
     secrets_summary = get_masked_secrets_summary()
+    providers = get_all_providers()
 
     return {
-        "active_provider": settings.get("active_provider", "openai"),
-        "active_model_id": settings.get("active_model_id", "gpt-4o"),
+        "active_provider": settings.get("active_provider", "universal"),
+        "active_model_id": settings.get("active_model_id", "deepseek-chat"),
         "custom_base_url": settings.get("custom_base_url", ""),
+        "ollama_base_url": settings.get("ollama_base_url", "http://localhost:11434"),
         "ollama": {
             "running": ollama_running,
             "models": ollama_models,
@@ -217,7 +236,8 @@ async def get_models():
             "model_path": settings.get("gguf_model_path", ""),
             "info": ModelRouter.validate_gguf(settings.get("gguf_model_path", "")) if settings.get("gguf_model_path") else None
         },
-        "credentials": secrets_summary
+        "credentials": secrets_summary,
+        "providers": providers
     }
 
 @app.post("/models/select")
@@ -228,18 +248,26 @@ async def select_model(req: ModelSelectRequest):
         if req.provider == "ollama":
             settings = load_settings()
             _, installed, _ = ModelRouter.detect_ollama(settings.get("ollama_base_url", "http://localhost:11434"))
-            model_id = installed[0] if installed else "llama3"
+            model_id = installed[0] if installed else "llama3.2"
         elif req.provider == "groq":
             model_id = "llama-3.3-70b-versatile"
         elif req.provider == "openai":
             model_id = "gpt-4o"
-        elif req.provider in ("custom", "universal"):
-            model_id = "default"
+        elif req.provider == "anthropic":
+            model_id = "claude-3-5-sonnet-20241022"
+        elif req.provider == "gemini":
+            model_id = "gemini-1.5-pro"
+        elif req.provider == "openrouter":
+            model_id = "anthropic/claude-3.5-sonnet"
+        elif req.provider in ("custom", "universal", "deepseek", "together", "mistral", "xai"):
+            model_id = "deepseek-chat"
 
     if model_id:
         updates["active_model_id"] = model_id
     if req.custom_base_url is not None:
         updates["custom_base_url"] = req.custom_base_url
+    if req.ollama_base_url is not None:
+        updates["ollama_base_url"] = req.ollama_base_url
     if req.gguf_model_path is not None:
         updates["gguf_model_path"] = req.gguf_model_path
     if req.api_key:
@@ -247,7 +275,13 @@ async def select_model(req: ModelSelectRequest):
             save_secret("OPENAI_API_KEY", req.api_key)
         elif req.provider == "groq":
             save_secret("GROQ_API_KEY", req.api_key)
-        elif req.provider in ("custom", "universal"):
+        elif req.provider == "anthropic":
+            save_secret("ANTHROPIC_API_KEY", req.api_key)
+        elif req.provider == "gemini":
+            save_secret("GEMINI_API_KEY", req.api_key)
+        elif req.provider == "openrouter":
+            save_secret("OPENROUTER_API_KEY", req.api_key)
+        elif req.provider in ("custom", "universal", "deepseek", "together", "mistral", "xai"):
             save_secret("CUSTOM_API_KEY", req.api_key)
 
     saved = save_settings(updates)
@@ -269,6 +303,18 @@ async def validate_gguf_endpoint(req: Dict[str, str]):
     path_str = req.get("path", "")
     info = ModelRouter.validate_gguf(path_str)
     return info
+
+@app.get("/models/ollama/cloud")
+async def get_ollama_cloud_models():
+    """Fetch models from Ollama Cloud Library"""
+    success, models, msg = ModelRouter.fetch_ollama_cloud_models()
+    return {"success": success, "models": models, "message": msg}
+
+@app.get("/models/providers")
+async def get_providers():
+    """Get list of all supported providers with their configurations"""
+    from backend.config import PROVIDER_CONFIGS
+    return {"providers": PROVIDER_CONFIGS}
 
 # ----------------- Tool Management Endpoints -----------------
 
@@ -358,7 +404,10 @@ async def update_settings_endpoint(req: SettingsUpdateRequest):
     # Securely store keys without returning raw values
     if req.openai_api_key: save_secret("OPENAI_API_KEY", req.openai_api_key)
     if req.groq_api_key: save_secret("GROQ_API_KEY", req.groq_api_key)
+    if req.anthropic_api_key: save_secret("ANTHROPIC_API_KEY", req.anthropic_api_key)
     if req.custom_api_key: save_secret("CUSTOM_API_KEY", req.custom_api_key)
+    if req.gemini_api_key: save_secret("GEMINI_API_KEY", req.gemini_api_key)
+    if req.openrouter_api_key: save_secret("OPENROUTER_API_KEY", req.openrouter_api_key)
 
     saved = save_settings(updates)
     return {
@@ -366,6 +415,94 @@ async def update_settings_endpoint(req: SettingsUpdateRequest):
         "settings": saved,
         "credentials": get_masked_secrets_summary()
     }
+
+# ----------------- MCP Server Endpoints -----------------
+
+@app.get("/mcp/servers")
+async def list_mcp_servers():
+    # For now, return empty list - will be implemented with MCP client
+    return {"servers": []}
+
+@app.post("/mcp/servers")
+async def add_mcp_server(req: MCPServerRequest):
+    # Store MCP server config
+    settings = load_settings()
+    mcp_servers = settings.get("mcp_servers", [])
+    
+    # Check if server with this name exists
+    existing_idx = next((i for i, s in enumerate(mcp_servers) if s["name"] == req.name), None)
+    server_config = {
+        "name": req.name,
+        "command": req.command,
+        "args": req.args,
+        "env": req.env,
+        "enabled": True
+    }
+    
+    if existing_idx is not None:
+        mcp_servers[existing_idx] = server_config
+    else:
+        mcp_servers.append(server_config)
+    
+    save_settings({"mcp_servers": mcp_servers})
+    return {"success": True, "server": server_config}
+
+@app.delete("/mcp/servers/{name}")
+async def remove_mcp_server(name: str):
+    settings = load_settings()
+    mcp_servers = settings.get("mcp_servers", [])
+    mcp_servers = [s for s in mcp_servers if s["name"] != name]
+    save_settings({"mcp_servers": mcp_servers})
+    return {"success": True, "message": f"MCP server {name} removed"}
+
+@app.post("/mcp/servers/{name}/enable")
+async def enable_mcp_server(name: str):
+    settings = load_settings()
+    mcp_servers = settings.get("mcp_servers", [])
+    for s in mcp_servers:
+        if s["name"] == name:
+            s["enabled"] = True
+            break
+    save_settings({"mcp_servers": mcp_servers})
+    return {"success": True, "name": name, "enabled": True}
+
+@app.post("/mcp/servers/{name}/disable")
+async def disable_mcp_server(name: str):
+    settings = load_settings()
+    mcp_servers = settings.get("mcp_servers", [])
+    for s in mcp_servers:
+        if s["name"] == name:
+            s["enabled"] = False
+            break
+    save_settings({"mcp_servers": mcp_servers})
+    return {"success": True, "name": name, "enabled": False}
+
+# ----------------- Agent Endpoints -----------------
+
+@app.get("/agents")
+async def list_agents():
+    # For now, return empty - will integrate with agent spawning system
+    return {"agents": []}
+
+@app.post("/agents/spawn")
+async def spawn_agent(req: AgentSpawnRequest):
+    # Spawn a new agent process
+    # This would integrate with the delegate_task system or tmux
+    return {
+        "success": True,
+        "agent_id": f"agent-{os.urandom(4).hex()}",
+        "role": req.role,
+        "task": req.task,
+        "status": "spawned"
+    }
+
+@app.post("/agents/{agent_id}/stop")
+async def stop_agent(agent_id: str):
+    return {"success": True, "message": f"Agent {agent_id} stopped"}
+
+@app.post("/agents/{agent_id}/steer")
+async def steer_agent(agent_id: str, req: Dict[str, str]):
+    return {"success": True, "message": f"Steering message sent to {agent_id}"}
 
 if __name__ == "__main__":
     import uvicorn
