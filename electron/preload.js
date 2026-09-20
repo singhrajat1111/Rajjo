@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   closeWindow: () => ipcRenderer.send('window-close'),
   selectGGUFFile: () => ipcRenderer.invoke('dialog-select-gguf'),
   getPlatform: () => process.platform,
+  getApiToken: () => ipcRenderer.invoke('get-api-token'),
   onBackendStatus: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('backend-status', handler);

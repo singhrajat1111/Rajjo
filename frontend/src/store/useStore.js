@@ -2,6 +2,44 @@ import { create } from 'zustand';
 
 const API_BASE = 'http://127.0.0.1:8000';
 
+let cachedApiToken = null;
+
+export async function getApiToken() {
+  if (cachedApiToken) return cachedApiToken;
+  try {
+    if (window.electronAPI && typeof window.electronAPI.getApiToken === 'function') {
+      const token = await window.electronAPI.getApiToken();
+      if (token) {
+        cachedApiToken = token;
+        return token;
+      }
+    }
+  } catch (e) {
+    console.error('Error fetching api token from electron:', e);
+  }
+  cachedApiToken = localStorage.getItem('rajjo_api_token') || (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RAJJO_API_TOKEN) || '';
+  return cachedApiToken;
+}
+
+export function setApiToken(token) {
+  cachedApiToken = token;
+  if (token) {
+    localStorage.setItem('rajjo_api_token', token);
+  } else {
+    localStorage.removeItem('rajjo_api_token');
+  }
+}
+
+export async function authFetch(url, options = {}) {
+  const token = await getApiToken();
+  const headers = new Headers(options.headers || {});
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+    headers.set('X-Rajjo-Token', token);
+  }
+  return fetch(url, { ...options, headers });
+}
+
 export const useStore = create((set, get) => ({
   // Navigation
   activeTab: 'chat', // 'chat' | 'models' | 'tools' | 'memory' | 'mcp' | 'agents' | 'settings'
@@ -23,7 +61,7 @@ export const useStore = create((set, get) => ({
   healthData: null,
   checkHealth: async () => {
     try {
-      const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3000) });
+      const res = await authFetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3000) });
       if (res.ok) {
         const data = await res.json();
         set({ backendOnline: true, healthData: data });
@@ -61,7 +99,7 @@ export const useStore = create((set, get) => ({
   fetchModels: async () => {
     set({ isLoadingModels: true });
     try {
-      const res = await fetch(`${API_BASE}/models`);
+      const res = await authFetch(`${API_BASE}/models`);
       if (res.ok) {
         const data = await res.json();
         set({ modelsData: data });
@@ -74,7 +112,7 @@ export const useStore = create((set, get) => ({
   },
   selectModel: async (payload) => {
     try {
-      const res = await fetch(`${API_BASE}/models/select`, {
+      const res = await authFetch(`${API_BASE}/models/select`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -91,7 +129,7 @@ export const useStore = create((set, get) => ({
   },
   testModelConnection: async (payload) => {
     try {
-      const res = await fetch(`${API_BASE}/models/test`, {
+      const res = await authFetch(`${API_BASE}/models/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -103,7 +141,7 @@ export const useStore = create((set, get) => ({
   },
   detectOllama: async (baseUrl = 'http://localhost:11434') => {
     try {
-      const res = await fetch(`${API_BASE}/models/ollama?base_url=${encodeURIComponent(baseUrl)}`);
+      const res = await authFetch(`${API_BASE}/models/ollama?base_url=${encodeURIComponent(baseUrl)}`);
       if (res.ok) {
         const data = await res.json();
         set((state) => ({
@@ -125,7 +163,7 @@ export const useStore = create((set, get) => ({
   },
   validateGGUFPath: async (path) => {
     try {
-      const res = await fetch(`${API_BASE}/models/validate-gguf`, {
+      const res = await authFetch(`${API_BASE}/models/validate-gguf`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path })
@@ -150,7 +188,7 @@ export const useStore = create((set, get) => ({
   fetchTools: async () => {
     set({ isLoadingTools: true });
     try {
-      const res = await fetch(`${API_BASE}/tools`);
+      const res = await authFetch(`${API_BASE}/tools`);
       if (res.ok) {
         const data = await res.json();
         set({ toolsList: data.tools || [] });
@@ -163,7 +201,7 @@ export const useStore = create((set, get) => ({
   },
   toggleTool: async (name, enabled) => {
     try {
-      const res = await fetch(`${API_BASE}/tools/toggle`, {
+      const res = await authFetch(`${API_BASE}/tools/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, enabled })
@@ -190,7 +228,7 @@ export const useStore = create((set, get) => ({
   fetchMCPServers: async () => {
     set({ isLoadingMCP: true });
     try {
-      const res = await fetch(`${API_BASE}/mcp/servers`);
+      const res = await authFetch(`${API_BASE}/mcp/servers`);
       if (res.ok) {
         const data = await res.json();
         set({ mcpServers: data.servers || [] });
@@ -203,7 +241,7 @@ export const useStore = create((set, get) => ({
   },
   toggleMCPServer: async (name, enabled) => {
     try {
-      const res = await fetch(`${API_BASE}/mcp/servers/${name}/${enabled ? 'enable' : 'disable'}`, {
+      const res = await authFetch(`${API_BASE}/mcp/servers/${name}/${enabled ? 'enable' : 'disable'}`, {
         method: 'POST'
       });
       if (res.ok) {
@@ -217,7 +255,7 @@ export const useStore = create((set, get) => ({
   },
   addMCPServer: async (server) => {
     try {
-      const res = await fetch(`${API_BASE}/mcp/servers`, {
+      const res = await authFetch(`${API_BASE}/mcp/servers`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(server)
@@ -233,7 +271,7 @@ export const useStore = create((set, get) => ({
   },
   removeMCPServer: async (name) => {
     try {
-      const res = await fetch(`${API_BASE}/mcp/servers/${name}`, {
+      const res = await authFetch(`${API_BASE}/mcp/servers/${name}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -256,8 +294,8 @@ export const useStore = create((set, get) => ({
     set({ isLoadingMemory: true });
     try {
       const [epRes, semRes] = await Promise.all([
-        fetch(`${API_BASE}/memory/episodic`),
-        fetch(`${API_BASE}/memory/semantic`)
+        authFetch(`${API_BASE}/memory/episodic`),
+        authFetch(`${API_BASE}/memory/semantic`)
       ]);
       if (epRes.ok && semRes.ok) {
         const epData = await epRes.json();
@@ -275,7 +313,7 @@ export const useStore = create((set, get) => ({
   },
   clearEpisodicMemory: async () => {
     try {
-      await fetch(`${API_BASE}/memory/episodic`, { method: 'DELETE' });
+      await authFetch(`${API_BASE}/memory/episodic`, { method: 'DELETE' });
       set({ episodicTasks: [] });
     } catch (e) {
       console.error(e);
@@ -283,7 +321,7 @@ export const useStore = create((set, get) => ({
   },
   clearSemanticMemory: async () => {
     try {
-      await fetch(`${API_BASE}/memory/semantic`, { method: 'DELETE' });
+      await authFetch(`${API_BASE}/memory/semantic`, { method: 'DELETE' });
       set({ semanticMemories: [] });
     } catch (e) {
       console.error(e);
@@ -291,7 +329,7 @@ export const useStore = create((set, get) => ({
   },
   exportMemory: async () => {
     try {
-      const res = await fetch(`${API_BASE}/memory/export`, { method: 'POST' });
+      const res = await authFetch(`${API_BASE}/memory/export`, { method: 'POST' });
       return await res.json();
     } catch (e) {
       console.error(e);
@@ -300,7 +338,7 @@ export const useStore = create((set, get) => ({
   },
   importMemory: async (data) => {
     try {
-      const res = await fetch(`${API_BASE}/memory/import`, {
+      const res = await authFetch(`${API_BASE}/memory/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -315,7 +353,7 @@ export const useStore = create((set, get) => ({
   },
   searchSemanticMemory: async (query, limit = 5) => {
     try {
-      const res = await fetch(`${API_BASE}/memory/semantic/search`, {
+      const res = await authFetch(`${API_BASE}/memory/semantic/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, limit })
@@ -335,7 +373,7 @@ export const useStore = create((set, get) => ({
   },
   fetchSettings: async () => {
     try {
-      const res = await fetch(`${API_BASE}/settings`);
+      const res = await authFetch(`${API_BASE}/settings`);
       if (res.ok) {
         const data = await res.json();
         set({ settingsData: data });
@@ -349,7 +387,7 @@ export const useStore = create((set, get) => ({
   },
   updateSettings: async (updates) => {
     try {
-      const res = await fetch(`${API_BASE}/settings`, {
+      const res = await authFetch(`${API_BASE}/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates)
@@ -372,7 +410,7 @@ export const useStore = create((set, get) => ({
   fetchAgents: async () => {
     set({ isLoadingAgents: true });
     try {
-      const res = await fetch(`${API_BASE}/agents`);
+      const res = await authFetch(`${API_BASE}/agents`);
       if (res.ok) {
         const data = await res.json();
         set({ agents: data.agents || [] });
@@ -385,7 +423,7 @@ export const useStore = create((set, get) => ({
   },
   spawnAgent: async (config) => {
     try {
-      const res = await fetch(`${API_BASE}/agents/spawn`, {
+      const res = await authFetch(`${API_BASE}/agents/spawn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config)
@@ -401,7 +439,7 @@ export const useStore = create((set, get) => ({
   },
   stopAgent: async (id) => {
     try {
-      const res = await fetch(`${API_BASE}/agents/${id}/stop`, {
+      const res = await authFetch(`${API_BASE}/agents/${id}/stop`, {
         method: 'POST'
       });
       if (res.ok) {
@@ -415,7 +453,7 @@ export const useStore = create((set, get) => ({
   },
   steerAgent: async (id, message) => {
     try {
-      const res = await fetch(`${API_BASE}/agents/${id}/steer`, {
+      const res = await authFetch(`${API_BASE}/agents/${id}/steer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message })

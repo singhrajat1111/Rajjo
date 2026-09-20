@@ -34,7 +34,7 @@ import {
   Lock,
   Unlock,
 } from 'lucide-react';
-import { useStore } from '../store/useStore';
+import { useStore, authFetch } from '../store/useStore';
 import { cn, formatRelativeTime, generateId } from '../lib/utils';
 import MarkdownRenderer from './MarkdownRenderer';
 
@@ -78,7 +78,7 @@ export default function ChatArea({
       abortControllerRef.current = null;
     }
     try {
-      await fetch('http://127.0.0.1:8000/chat/abort', { method: 'POST' });
+      await authFetch('http://127.0.0.1:8000/chat/abort', { method: 'POST' });
     } catch (e) {
       console.error('Abort request failed:', e);
     }
@@ -124,7 +124,7 @@ export default function ChatArea({
     abortControllerRef.current = controller;
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/chat', {
+      const response = await authFetch('http://127.0.0.1:8000/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

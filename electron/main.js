@@ -2,11 +2,51 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const crypto = require('crypto');
+const os = require('os');
 const { spawn } = require('child_process');
 
 const isDev = !app.isPackaged;
 let mainWindow = null;
 let pythonProcess = null;
+
+function getOrCreateApiToken() {
+  if (process.env.RAJJO_API_TOKEN && process.env.RAJJO_API_TOKEN.trim()) {
+    return process.env.RAJJO_API_TOKEN.trim();
+  }
+  let dataDir;
+  if (process.env.RAJJO_DATA_DIR) {
+    dataDir = process.env.RAJJO_DATA_DIR;
+  } else if (process.platform === 'win32') {
+    dataDir = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Rajjo');
+  } else {
+    dataDir = path.join(os.homedir(), '.rajjo');
+  }
+  const tokenFile = path.join(dataDir, '.session_token');
+  try {
+    if (fs.existsSync(tokenFile)) {
+      const stored = fs.readFileSync(tokenFile, 'utf-8').trim();
+      if (stored.length >= 32) {
+        process.env.RAJJO_API_TOKEN = stored;
+        return stored;
+      }
+    }
+  } catch (e) {
+    console.error('[Electron] Error reading session token:', e);
+  }
+
+  const generated = crypto.randomBytes(32).toString('hex');
+  process.env.RAJJO_API_TOKEN = generated;
+  try {
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    fs.writeFileSync(tokenFile, generated, { encoding: 'utf-8' });
+  } catch (e) {
+    console.error('[Electron] Error writing session token:', e);
+  }
+  return generated;
+}
 
 function findPythonExecutable() {
   const rootDir = path.join(__dirname, '..');
@@ -59,6 +99,7 @@ function checkBackendHealth(retries = 30, interval = 500) {
 function spawnPythonBackend() {
   console.log('[Electron] Starting Python backend...');
 
+  const apiToken = getOrCreateApiToken();
   let scriptPath;
   let args = [];
   let options = {};
@@ -70,6 +111,7 @@ function spawnPythonBackend() {
       cwd: path.join(__dirname, '..', 'backend'),
       env: {
         ...process.env,
+        RAJJO_API_TOKEN: apiToken,
         PYTHONPATH: path.join(__dirname, '..'),
         PYTHONUNBUFFERED: '1'
       }
@@ -80,7 +122,11 @@ function spawnPythonBackend() {
     scriptPath = path.join(process.resourcesPath, 'bin', 'rajjo_backend.exe');
     args = [];
     options = {
-      cwd: path.dirname(scriptPath)
+      cwd: path.dirname(scriptPath),
+      env: {
+        ...process.env,
+        RAJJO_API_TOKEN: apiToken
+      }
     };
     console.log(`[Electron] Using packaged backend binary: ${scriptPath}`);
   }
@@ -197,6 +243,10 @@ ipcMain.handle('dialog-select-gguf', async () => {
     return res.filePaths[0];
   }
   return null;
+});
+
+ipcMain.handle('get-api-token', async () => {
+  return getOrCreateApiToken();
 });
 
 // ----------------- App Lifecycle -----------------

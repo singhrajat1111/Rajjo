@@ -17,9 +17,12 @@ from typing import List, Dict, Any, Optional
 import json
 import asyncio
 
+import hmac
+
 from backend.config import (
     DATA_DIR, load_settings, save_settings,
-    get_secret, save_secret, get_masked_secrets_summary, get_provider_config, get_all_providers
+    get_secret, save_secret, get_masked_secrets_summary, get_provider_config, get_all_providers,
+    get_or_create_session_token, get_workspace_dir
 )
 from backend.model_router import router, ModelRouter
 from backend.tools.registry import registry
@@ -31,14 +34,47 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 app = FastAPI(title="Rajjo Backend", version="2.0.0")
 
-# Enable CORS for Vite and Electron
+# Restrict CORS to trusted local origins (Vite dev server, Electron, and local hosts)
+ALLOWED_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "null",  # Electron packaged apps using file://
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_CORS_ORIGINS,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
 )
+
+# Authentication Middleware: Protect all endpoints against drive-by localhost attacks
+@app.middleware("http")
+async def authenticate_request(request: Request, call_next):
+    # Health checks and CORS OPTIONS preflights are publicly accessible
+    if request.method == "OPTIONS" or request.url.path in ("/health", "/health/"):
+        return await call_next(request)
+
+    expected_token = get_or_create_session_token()
+    auth_header = request.headers.get("Authorization", "")
+    token = ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif "X-Rajjo-Token" in request.headers:
+        token = request.headers.get("X-Rajjo-Token", "").strip()
+
+    # Timing-safe token comparison
+    if not token or not hmac.compare_digest(token, expected_token):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Unauthorized: Invalid or missing Rajjo API token."}
+        )
+
+    return await call_next(request)
 
 # Global cancellation token
 _abort_flag = False
