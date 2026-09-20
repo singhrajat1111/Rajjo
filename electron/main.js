@@ -225,6 +225,12 @@ ipcMain.on('window-maximize', () => {
   }
 });
 
+ipcMain.on('window-fullscreen', () => {
+  if (mainWindow) {
+    mainWindow.setFullScreen(!mainWindow.isFullScreen());
+  }
+});
+
 ipcMain.on('window-close', () => {
   if (mainWindow) mainWindow.close();
 });

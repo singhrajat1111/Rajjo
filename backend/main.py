@@ -138,6 +138,7 @@ async def health():
     episodic_tasks = len(episodic.get_recent_tasks(limit=1))
     return {
         "status": "ok",
+        "backendOnline": True,
         "agent": "Rajjo",
         "version": "2.0.0",
         "active_provider": settings.get("active_provider", "universal"),

@@ -33,6 +33,7 @@ import {
   Key,
   Lock,
   Unlock,
+  Check,
 } from 'lucide-react';
 import { useStore, authFetch } from '../store/useStore';
 import { cn, formatRelativeTime, generateId } from '../lib/utils';
@@ -59,10 +60,38 @@ export default function ChatArea({
   const [liveAgentMessage, setLiveAgentMessage] = useState('');
   const [isActivityOpen, setIsActivityOpen] = useState(true);
   const [expandedMessageSteps, setExpandedMessageSteps] = useState({});
+  const [copiedMsgIdx, setCopiedMsgIdx] = useState(null);
+  const [bookmarkedIndices, setBookmarkedIndices] = useState({});
+  const [flaggedIndices, setFlaggedIndices] = useState({});
   const messagesEndRef = useRef(null);
   const activitiesRef = useRef([]);
   const abortControllerRef = useRef(null);
   const textareaRef = useRef(null);
+
+  const handleCopyMessage = (text, idx) => {
+    if (!text) return;
+    navigator.clipboard?.writeText(text);
+    setCopiedMsgIdx(idx);
+    setTimeout(() => setCopiedMsgIdx(null), 2000);
+  };
+
+  const handleToggleBookmark = (idx) => {
+    setBookmarkedIndices(prev => ({ ...prev, [idx]: !prev[idx] }));
+  };
+
+  const handleToggleFlag = (idx) => {
+    setFlaggedIndices(prev => ({ ...prev, [idx]: !prev[idx] }));
+  };
+
+  const handleRegenerate = (idx) => {
+    // Find the nearest preceding user message
+    for (let i = idx - 1; i >= 0; i--) {
+      if (messages[i]?.role === 'user') {
+        handleSend(messages[i].content);
+        break;
+      }
+    }
+  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -465,20 +494,62 @@ export default function ChatArea({
 
                 {/* Message Actions */}
                 <div className="flex items-center gap-1 pt-2 border-t border-[var(--border-default)]">
-                  <button className="btn btn-ghost btn-sm p-1.5" title="Copy" aria-label="Copy message">
-                    <Copy size={12} />
+                  <button
+                    onClick={() => handleCopyMessage(msg.content, i)}
+                    className="btn btn-ghost btn-sm p-1.5"
+                    title={copiedMsgIdx === i ? "Copied!" : "Copy message"}
+                    aria-label="Copy message"
+                  >
+                    {copiedMsgIdx === i ? (
+                      <Check size={12} className="text-[var(--success)]" />
+                    ) : (
+                      <Copy size={12} />
+                    )}
                   </button>
-                  <button className="btn btn-ghost btn-sm p-1.5" title="Regenerate" aria-label="Regenerate response">
-                    <RefreshCw size={12} />
-                  </button>
-                  <button className="btn btn-ghost btn-sm p-1.5" title="Share" aria-label="Share message">
+
+                  {msg.role === 'agent' && (
+                    <button
+                      onClick={() => handleRegenerate(i)}
+                      disabled={isProcessing}
+                      className="btn btn-ghost btn-sm p-1.5"
+                      title="Regenerate response"
+                      aria-label="Regenerate response"
+                    >
+                      <RefreshCw size={12} />
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => handleCopyMessage(msg.content, i)}
+                    className="btn btn-ghost btn-sm p-1.5"
+                    title="Share / Copy message text"
+                    aria-label="Share message"
+                  >
                     <Share2 size={12} />
                   </button>
-                  <button className="btn btn-ghost btn-sm p-1.5" title="Bookmark" aria-label="Bookmark message">
-                    <Star size={12} />
+
+                  <button
+                    onClick={() => handleToggleBookmark(i)}
+                    className="btn btn-ghost btn-sm p-1.5"
+                    title={bookmarkedIndices[i] ? "Bookmarked" : "Bookmark message"}
+                    aria-label="Bookmark message"
+                  >
+                    <Star
+                      size={12}
+                      className={bookmarkedIndices[i] ? "text-amber-400 fill-amber-400" : ""}
+                    />
                   </button>
-                  <button className="btn btn-ghost btn-sm p-1.5" title="Flag" aria-label="Flag message">
-                    <Flag size={12} />
+
+                  <button
+                    onClick={() => handleToggleFlag(i)}
+                    className="btn btn-ghost btn-sm p-1.5"
+                    title={flaggedIndices[i] ? "Flagged" : "Flag message"}
+                    aria-label="Flag message"
+                  >
+                    <Flag
+                      size={12}
+                      className={flaggedIndices[i] ? "text-[var(--danger)] fill-[var(--danger)]" : ""}
+                    />
                   </button>
                 </div>
               </div>

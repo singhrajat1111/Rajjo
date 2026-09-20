@@ -64,11 +64,14 @@ export const useStore = create((set, get) => ({
       const res = await authFetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3000) });
       if (res.ok) {
         const data = await res.json();
-        set({ backendOnline: true, healthData: data });
+        set({ backendOnline: true, healthData: { ...data, backendOnline: true } });
         return true;
       }
     } catch {
-      set({ backendOnline: false });
+      set((state) => ({
+        backendOnline: false,
+        healthData: state.healthData ? { ...state.healthData, backendOnline: false } : { backendOnline: false }
+      }));
     }
     return false;
   },

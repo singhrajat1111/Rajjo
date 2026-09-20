@@ -4,7 +4,8 @@
   "description": "Local-First Autonomous AI Desktop Agent - Professional Edition",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently -k -n \"BACKEND,FRONTEND,ELECTRON\" -c \"cyan,magenta,green\" \"npm run backend:dev\" \"npm run frontend:dev\" \"wait-on http://127.0.0.1:8000/health && wait-on http://localhost:5173 && npm run electron:dev\"",
+    "dev": "concurrently -k -n \"BACKEND,FRONTEND,ELECTRON\" -c \"cyan,magenta,green\" \"npm run backend:dev\" \"npm run frontend:dev\" \"wait-on -t 60000 http://127.0.0.1:8000/health http://localhost:5173 && npm run electron:dev\"",
+    "setup": "node scripts/setup.js",
     "backend:dev": "node scripts/backend_dev.js",
     "frontend:dev": "cd frontend && npm run dev",
     "electron:dev": "electron .",
@@ -12,7 +13,7 @@
     "build:backend": "node scripts/build_backend.js",
     "test": "node scripts/run_test.js",
     "dist": "npm run build:frontend && node scripts/build_backend.js && electron-builder",
-    "install:all": "npm install && cd frontend && npm install && cd ../backend && pip install -r requirements.txt"
+    "install:all": "node scripts/setup.js"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

@@ -130,7 +130,11 @@ export default function Sidebar({
           {!isCollapsed ? (
             <div className="space-y-3">
               {/* Backend Status */}
-              <div className="flex items-center justify-between">
+              <div
+                onClick={() => window.dispatchEvent(new CustomEvent('check-health'))}
+                className="flex items-center justify-between cursor-pointer group"
+                title="Click to re-check backend status"
+              >
                 <div className="flex items-center gap-2">
                   <motion.div
                     animate={{ scale: [1, 1.2, 1] }}
@@ -140,7 +144,7 @@ export default function Sidebar({
                       healthData?.backendOnline ? 'bg-[var(--success)]' : 'bg-[var(--danger)]'
                     )}
                   />
-                  <span className="text-xs font-medium text-[var(--fg-secondary)]">
+                  <span className="text-xs font-medium text-[var(--fg-secondary)] group-hover:text-[var(--fg-primary)] transition-colors">
                     {healthData?.backendOnline ? 'Backend Connected' : 'Backend Offline'}
                   </span>
                 </div>

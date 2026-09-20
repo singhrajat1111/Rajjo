@@ -136,64 +136,140 @@ Rajjo/
 
 ---
 
-## 🚀 Quick Start & Development
+## 🚀 Getting Started (From Fresh Clone)
+
+If you just cloned this repository and are wondering how to get everything up and running, follow these simple steps.
 
 ### 1. Prerequisites
-- **Node.js**: `v18+` (Tested on `v24.x`)
-- **Python**: `3.10+` (Tested on `3.14.x`)
 
-### 2. Setup Dependencies
+Make sure you have the following installed on your machine:
+- **Node.js**: `v18+` (Recommended: `v20+` or `v22+`) — check with `node -v` and `npm -v`
+- **Python**: `3.10+` (Recommended: `3.10` to `3.14`) — check with `python --version` (or `python3 --version`)
+- **Git**: check with `git --version`
+
+---
+
+### 2. Setup & Installation
+
+You have two choices: **One-Command Automated Setup (Recommended)** or **Manual Step-by-Step**.
+
+#### Option A: One-Command Automated Setup (Recommended)
+
+Run the automated setup script from the root project folder:
 
 ```bash
-# Clone the repository
+# 1. Clone repository
 git clone https://github.com/your-username/Rajjo.git
 cd Rajjo
 
-# Install all dependencies (root, frontend, backend)
-npm run install:all
+# 2. Run automated setup
+npm run setup
+```
 
-# Or manually:
-# Install root & frontend Node dependencies
+> **What `npm run setup` does automatically for you:**
+> 1. Copies `.env.example` to `.env` if `.env` does not exist.
+> 2. Installs root dependencies (`concurrently`, `electron`, `wait-on`, etc.).
+> 3. Installs React/Vite dependencies inside `frontend/`.
+> 4. Creates a dedicated Python virtual environment in `backend/venv`.
+> 5. Installs all required Python packages (FastAPI, LangGraph, llama-cpp-python, ChromaDB, etc.) directly into `backend/venv`.
+
+---
+
+#### Option B: Manual Step-by-Step Setup
+
+If you prefer doing each step manually:
+
+##### Step 1: Install Root & Frontend Dependencies
+```bash
+# Install root tools (Electron, concurrently, wait-on)
 npm install
-cd frontend && npm install && cd ..
 
-# Setup Python virtual environment
-cd backend
-python -m venv venv
-# On Windows:
-venv\Scripts\pip install -r requirements.txt
-# On Linux/macOS:
-source venv/bin/activate && pip install -r requirements.txt
+# Install React frontend packages
+cd frontend
+npm install
 cd ..
 ```
 
-### 3. Launch Development Environment
+##### Step 2: Create Python Virtual Environment & Install Backend Packages
+**On Windows (PowerShell / Command Prompt):**
+```powershell
+# Create venv inside backend/
+cd backend
+python -m venv venv
 
-Run the unified startup command:
+# Upgrade pip and install all required libraries
+.\venv\Scripts\python.exe -m pip install --upgrade pip
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+cd ..
+```
+
+**On Linux / macOS:**
+```bash
+# Create venv inside backend/
+cd backend
+python3 -m venv venv
+
+# Upgrade pip and install all required libraries
+./venv/bin/python -m pip install --upgrade pip
+./venv/bin/python -m pip install -r requirements.txt
+cd ..
+```
+
+##### Step 3: Configure Environment Variables
+```bash
+cp .env.example .env
+```
+*(Optional: Open `.env` to add API keys such as `OPENAI_API_KEY`, `GROQ_API_KEY`, or local Ollama configurations).*
+
+---
+
+### 3. Launch Application with `npm run dev`
+
+To start the complete application at once, run:
 
 ```bash
 npm run dev
 ```
 
-This single command orchestrates:
-1. Spawning the FastAPI backend on `http://127.0.0.1:8000`.
-2. Awaiting the `/health` endpoint check.
-3. Spawning the Vite frontend server on `http://localhost:5173`.
-4. Awaiting frontend availability.
-5. Launching the Electron desktop window.
+#### What `npm run dev` does:
+`npm run dev` uses `concurrently` and `wait-on` to orchestrate all services together:
+1. **Spawns Python Backend**: Runs the FastAPI server on `http://127.0.0.1:8000`.
+2. **Spawns Frontend Server**: Starts the Vite React development server on `http://localhost:5173`.
+3. **Waits for Health Checks**: Monitors both `http://127.0.0.1:8000/health` and `http://localhost:5173`.
+4. **Launches Electron Shell**: Opens the desktop app as soon as both backend and frontend are ready.
+5. **Unified Process Lifecycle**: Pressing `Ctrl + C` or closing the Electron window automatically terminates all 3 background services cleanly.
 
-### Individual Service Debugging Commands
+---
+
+### 4. Running Services Individually (Optional / Debugging)
+
+If you ever need to debug a single component independently:
 
 ```bash
-# Run only FastAPI backend
+# Start only the FastAPI backend server (port 8000)
 npm run backend:dev
 
-# Run only Vite frontend
+# Start only the Vite React development server (port 5173)
 npm run frontend:dev
 
-# Run only Electron shell
+# Start only the Electron shell (requires backend & frontend to already be running)
 npm run electron:dev
 ```
+
+---
+
+### 5. Troubleshooting Common Issues
+
+- **`ModuleNotFoundError: No module named 'fastapi'`**:
+  - **Reason**: The Python virtual environment in `backend/venv` is missing dependencies or packages were installed to global Python instead of the virtualenv.
+  - **Fix**: Run `npm run setup` or execute `.\backend\venv\Scripts\python.exe -m pip install -r backend\requirements.txt` from the project root.
+
+- **`ERR_CONNECTION_REFUSED on http://localhost:5173`**:
+  - **Reason**: Electron was launched on its own (`npx electron .`) while the frontend Vite server was not running.
+  - **Fix**: Always use `npm run dev` to launch backend, frontend, and Electron simultaneously.
+
+- **PowerShell Execution Policy Error (`cannot be loaded because running scripts is disabled`)**:
+  - **Fix**: Run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` in your PowerShell window before activating the venv.
 
 ---
 

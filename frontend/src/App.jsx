@@ -140,6 +140,7 @@ export default function App() {
     fetchModels,
     isProcessing,
     healthData,
+    backendOnline,
     theme,
     setTheme,
     sidebarOpen,
@@ -159,7 +160,15 @@ export default function App() {
     checkHealth();
     fetchModels();
     const interval = setInterval(() => checkHealth(), 5000);
-    return () => clearInterval(interval);
+    const onCheck = () => {
+      checkHealth();
+      fetchModels();
+    };
+    window.addEventListener('check-health', onCheck);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('check-health', onCheck);
+    };
   }, [checkHealth, fetchModels]);
 
   // Apply theme to document
@@ -234,7 +243,10 @@ export default function App() {
         onToggleVisibleWindow={() => setIsVisibleWindowOpen(!isVisibleWindowOpen)}
         isProcessing={isProcessing}
         onAbort={handleAbortTask}
-        healthData={healthData}
+        healthData={{ ...(healthData || {}), backendOnline }}
+        backendOnline={backendOnline}
+        onCheckHealth={checkHealth}
+        onTabChange={setActiveTab}
         theme={theme}
         onThemeChange={setTheme}
         onCommandPalette={() => setCommandPaletteOpen(true)}
@@ -248,7 +260,7 @@ export default function App() {
           activeTab={activeTab}
           onTabChange={setActiveTab}
           tabs={tabConfig}
-          healthData={healthData}
+          healthData={{ ...(healthData || {}), backendOnline }}
           isProcessing={isProcessing}
         />
 
