@@ -357,24 +357,33 @@ class ModelRouter:
             size_bytes = p.stat().st_size
             size_gb = round(size_bytes / (1024 ** 3), 2)
 
+            # Check GGUF magic header bytes (0x47 0x47 0x55 0x46)
+            try:
+                with open(p, "rb") as f:
+                    magic = f.read(4)
+                if magic != b"GGUF":
+                    return {"valid": False, "error": "File does not contain valid GGUF header magic bytes."}
+            except Exception as e:
+                return {"valid": False, "error": f"Failed to read file: {e}"}
+
             # Try to read GGUF metadata if possible
             arch = None
             quantization = None
-            try:
-                from llama_cpp import Llama
-                # Quick metadata read
-                llm = Llama(model_path=str(p), n_ctx=512, verbose=False)
-                # We can't easily get arch/quant without loading, but file size gives hints
-                if size_gb < 2:
-                    quantization = "Q4_K_M or similar (small)"
-                elif size_gb < 5:
-                    quantization = "Q4_K_M / Q5_K_M"
-                elif size_gb < 10:
-                    quantization = "Q6_K / Q8_0"
-                else:
-                    quantization = "High precision / F16"
-            except Exception:
-                pass
+            if size_bytes > 50 * 1024 * 1024:  # Only attempt full model parse for real weights > 50MB
+                try:
+                    from llama_cpp import Llama
+                    llm = Llama(model_path=str(p), n_ctx=512, verbose=False)
+                except Exception:
+                    pass
+
+            if size_gb < 2:
+                quantization = "Q4_K_M or similar (small)"
+            elif size_gb < 5:
+                quantization = "Q4_K_M / Q5_K_M"
+            elif size_gb < 10:
+                quantization = "Q6_K / Q8_0"
+            else:
+                quantization = "High precision / F16"
 
             return {
                 "valid": True,

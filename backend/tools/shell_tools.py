@@ -74,6 +74,21 @@ HIGH_RISK_RULES = [
     (
         r"(\.session_token|secrets\.json|\.ssh[\\/]id_|\.aws[\\/]credentials)",
         "Blocked attempt to access or modify credential stores or session tokens via shell."
+    ),
+    # 8. Inline Interpreter Destructive Invocations (e.g. python -c "import shutil; shutil.rmtree('/')")
+    (
+        r"\b(python\d?|node|perl|ruby|php)\s+(-c|-e)\s+.*(rmtree|unlink|remove\(|rmdir|system\(|subprocess|shutil|exec\(|eval\()",
+        "Blocked inline script execution attempting destructive filesystem or process operations."
+    ),
+    # 9. Multi-Stage Download & Immediate Execution Chains
+    (
+        r"(curl|wget|certutil|bitsadmin|Invoke-WebRequest|iwr)\b.*(&&|;|\n).*(\./|chmod\s+\+x|bash|sh|powershell|cmd\.exe)",
+        "Blocked multi-stage download and immediate script execution chain."
+    ),
+    # 10. Direct Redirection into Protected System Directories
+    (
+        r">\s*(/etc/|/boot/|/sys/|/usr/|/bin/|/sbin/|[a-zA-Z]:\\windows\\|[a-zA-Z]:\\program)",
+        "Blocked shell output redirection into protected operating system directories."
     )
 ]
 
