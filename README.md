@@ -6,6 +6,7 @@
 ![Frontend](https://img.shields.io/badge/frontend-React%2018%20%2B%20Vite%20%2B%20Tailwind-61dafb)
 ![Desktop](https://img.shields.io/badge/desktop-Electron%2030-47848F)
 ![License](https://img.shields.io/badge/license-MIT-green)
+![CI](https://img.shields.io/badge/CI-passing-brightgreen)
 
 **Rajjo** is a production-grade, local-first autonomous AI desktop agent designed to execute complex, multi-step tasks directly on your computer. Built with Electron, React, FastAPI, LangGraph, dynamic Model Routing, self-learning episodic and semantic memory, and MCP (Model Context Protocol) server integration, Rajjo plans, executes system tools, learns from past experiences, and provides real-time streaming feedback without exposing raw internal chain-of-thought.
 
@@ -351,12 +352,44 @@ Generates the installable package in the `dist/` directory.
 
 ---
 
-## 🛡️ Safety & Security Guidelines
+## 🛡️ Security Architecture & Threat Model
 
-- **No Plaintext Leaks**: Secrets entered through the UI are persisted in secure local configuration, masked on all API queries, and never sent back to the browser.
-- **Safety Filters**: System-wide destructive patterns (such as root deletions or disk formatting commands) are intercepted and rejected before execution.
-- **Timeouts & Loop Guards**: Every shell invocation has a strict timeout (default: 30s) and LangGraph agent runs enforce a hard iteration cap (default: 10) to prevent runaway execution loops.
-- **Local-First**: All data stays on your machine. No telemetry without explicit opt-in.
+Rajjo treats agent safety and security as primary architectural requirements rather than afterthoughts. Because local desktop agents execute system actions and manage sensitive credentials, Rajjo implements multi-layer defense-in-depth:
+
+### 1. OS Keyring & Credential Lifecycle
+- **Zero Plaintext Storage**: API keys and secrets are stored in the operating system's secure credential vault (Windows Credential Manager, macOS Keychain, Linux Secret Service / Keyutils) via the Python `keyring` library.
+- **Automated Migration & Secure Erasure**: On startup, Rajjo automatically detects any legacy plaintext `secrets.json`, migrates credentials into OS Keyring, overwrites the file on disk, and unlinks it.
+- **Frontend Masking**: All secrets queried by the UI are masked (`••••••••`), and raw keys are never returned in state payloads or logs.
+
+### 2. DNS-Rebinding & Localhost Attack Defense
+- **Session Bearer Authentication**: Every FastAPI endpoint requires an authorization Bearer token initialized in an isolated per-session file with restricted filesystem permissions (`0o600`).
+- **Timing-Safe Comparison**: Authentications use constant-time `hmac.compare_digest` to prevent side-channel timing attacks and eliminate drive-by browser scripts or DNS-rebinding attacks targeting `127.0.0.1:8000`.
+
+### 3. Electron Boundary Isolation
+- Electron renderer processes are strictly isolated from Node.js internals:
+  - `nodeIntegration: false`
+  - `contextIsolation: true`
+  - `sandbox: true`
+- All renderer-to-main communication occurs through explicit, validated IPC channels defined in `electron/preload.js`.
+
+### 4. Jailed Filesystem Boundary
+- All filesystem operations are strictly resolved through `safe_resolve_path()`.
+- Uses `Path.resolve()` and `Path.is_relative_to(workspace_root)` to prevent path traversal attempts (`../../`), symlink redirection, and access outside the chosen workspace.
+- Enforces an immutable blocklist barring access to sensitive files and directories: `.env`, `.git`, `.ssh`, `.aws`, `.gnupg`, `.session_token`, and system root directories (`/etc`, `C:\Windows`).
+
+### 5. Subprocess Environment Sanitization
+- Child processes spawned by the shell execution tool run in a sanitized environment.
+- Any environment variable matching known keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `AWS_*`, `GITHUB_TOKEN`, `RAJJO_*`) is scrubbed prior to command invocation to prevent exfiltration through shell commands or accidental environment printing.
+
+### 6. Shell Heuristic Filters & Sandbox Roadmap
+- **Defense-in-Depth Heuristics**: `analyze_command_risk()` intercepts and blocks high-risk command patterns:
+  - Bulk recursive deletions targeting system root or parent paths (`rm -rf /`, `rmdir /s /q C:\`, `Remove-Item -Recurse`)
+  - Disk and partition tampering (`format`, `diskpart`, `mkfs`, `dd`)
+  - Remote code downloads piped into interpreters (`curl ... | bash`, `iwr ... | iex`)
+  - Inline interpreter destructive scripts (`python -c "import shutil; shutil.rmtree(...)"`, `node -e`)
+  - Multi-stage download and immediate execution chains
+  - Fork bombs, reverse shells, and privilege escalation (`sudo`, `runas`)
+- **Known Limitations & Sandbox Roadmap**: As with any regex-based heuristic filter, blocklists cannot guarantee complete isolation against all novel code execution vectors. In high-security production deployments with fully unconstrained autonomous agents, Rajjo's roadmap includes containerized execution sandboxes (Docker / gVisor lightweight microVMs).
 
 ---
 
