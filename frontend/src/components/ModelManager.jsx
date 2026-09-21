@@ -65,6 +65,9 @@ import {
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { cn, formatBytes } from '../lib/utils';
+import ProviderCards from './model-manager/ProviderCards';
+import ActiveModelSummary from './model-manager/ActiveModelSummary';
+import GGUFConfigSection from './model-manager/GGUFConfigSection';
 
 export default function ModelManager() {
   const {
@@ -122,11 +125,11 @@ export default function ModelManager() {
         setModelId('deepseek-chat');
       }
     } else if (newProvider === 'anthropic') {
-      setModelId('claude-3-5-sonnet-20241022');
+      setModelId('claude-3-7-sonnet');
     } else if (newProvider === 'gemini') {
-      setModelId('gemini-1.5-pro');
+      setModelId('gemini-2.0-flash');
     } else if (newProvider === 'openrouter') {
-      setModelId('anthropic/claude-3.5-sonnet');
+      setModelId('anthropic/claude-3.7-sonnet');
     }
   }, [modelId, modelsData]);
 
@@ -189,9 +192,9 @@ export default function ModelManager() {
     }
     if (provider === 'openai') return modelId || 'gpt-4o';
     if (provider === 'groq') return modelId || 'llama-3.3-70b-versatile';
-    if (provider === 'anthropic') return modelId || 'claude-3-5-sonnet-20241022';
-    if (provider === 'gemini') return modelId || 'gemini-1.5-pro';
-    if (provider === 'openrouter') return modelId || 'anthropic/claude-3.5-sonnet';
+    if (provider === 'anthropic') return modelId || 'claude-3-7-sonnet';
+    if (provider === 'gemini') return modelId || 'gemini-2.0-flash';
+    if (provider === 'openrouter') return modelId || 'anthropic/claude-3.7-sonnet';
     if (provider === 'universal' || provider === 'custom') return modelId || 'deepseek-chat';
     if (provider === 'gguf') return 'rajjo-direct-gguf';
     return modelId;
@@ -233,12 +236,12 @@ export default function ModelManager() {
   }, [provider, getEffectiveModelId, customBaseUrl, ollamaBaseUrl, ggufPath, apiKey, testModelConnection]);
 
   const providerOptions = [
-    { id: 'universal', label: 'Universal API', desc: 'Any OpenAI-compatible endpoint', icon: Globe, color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/30' },
-    { id: 'openai', label: 'OpenAI', desc: 'GPT-4o, o1, o3-mini', icon: Brain, color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/30' },
-    { id: 'anthropic', label: 'Anthropic', desc: 'Claude 3.5 Sonnet, Haiku', icon: Sparkles, color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/30' },
-    { id: 'groq', label: 'Groq', desc: 'Ultra-fast inference', icon: Zap, color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30' },
-    { id: 'gemini', label: 'Google Gemini', desc: 'Gemini 1.5 Pro, Flash', icon: Cpu, color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30' },
-    { id: 'openrouter', label: 'OpenRouter', desc: '100+ models, one API', icon: Network, color: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/30' },
+    { id: 'universal', label: 'Universal API', desc: 'DeepSeek-V3/R1, Qwen & OpenAI-compatible', icon: Globe, color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/30' },
+    { id: 'openai', label: 'OpenAI', desc: 'GPT-4o, o3-mini, o1', icon: Brain, color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/30' },
+    { id: 'anthropic', label: 'Anthropic', desc: 'Claude 3.7 Sonnet & 3.5 Haiku', icon: Sparkles, color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/30' },
+    { id: 'groq', label: 'Groq', desc: 'Ultra-fast Llama 3.3 & DeepSeek-R1', icon: Zap, color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30' },
+    { id: 'gemini', label: 'Google Gemini', desc: 'Gemini 2.0 Flash & Pro', icon: Cpu, color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30' },
+    { id: 'openrouter', label: 'OpenRouter', desc: '100+ models, one unified API', icon: Network, color: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/30' },
     { id: 'ollama', label: 'Local Ollama', desc: 'Installed local models', icon: HardDrive, color: 'text-[var(--brand-400)]', bg: 'bg-cyan-500/10', border: 'border-cyan-500/30' },
     { id: 'gguf', label: 'Direct GGUF', desc: 'Run any .gguf file directly', icon: Database, color: 'text-[var(--accent-400)]', bg: 'bg-amber-500/10', border: 'border-amber-500/30' },
   ];
@@ -268,45 +271,11 @@ export default function ModelManager() {
       </motion.div>
 
       {/* Provider Selector Cards */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3"
-      >
-        {providerOptions.map(item => (
-          <motion.button
-            key={item.id}
-            onClick={() => handleProviderSelect(item.id)}
-            whileHover={{ y: -2, scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className={cn(
-              'p-4 rounded-xl border cursor-pointer transition-all duration-200 relative overflow-hidden group',
-              'flex flex-col items-start gap-3',
-              provider === item.id
-                ? 'bg-cyan-500/5 border-cyan-500/30 shadow-[var(--glow-brand)]'
-                : `${item.bg} ${item.border} hover:border-cyan-500/30 hover:shadow-md`
-            )}
-          >
-            <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center', item.bg)}>
-              <item.icon size={20} className={item.color} />
-            </div>
-            <div className="flex-1 w-full">
-              <div className="font-semibold text-sm text-[var(--fg-primary)]">{item.label}</div>
-              <p className="text-[11px] text-[var(--fg-muted)]">{item.desc}</p>
-            </div>
-            {provider === item.id && (
-              <motion.div
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                className="absolute top-3 right-3 w-5 h-5 rounded-full bg-[var(--brand-500)] flex items-center justify-center"
-              >
-                <CheckCircle2 size={12} className="text-[var(--fg-primary)]" />
-              </motion.div>
-            )}
-          </motion.button>
-        ))}
-      </motion.div>
+      <ProviderCards
+        providerOptions={providerOptions}
+        activeProvider={provider}
+        onSelectProvider={handleProviderSelect}
+      />
 
       {/* Configuration Form */}
       <motion.div
@@ -414,12 +383,12 @@ export default function ModelManager() {
               >
                 <option value="gpt-4o">GPT-4o</option>
                 <option value="gpt-4o-mini">GPT-4o Mini</option>
-                <option value="o1-preview">o1 Preview</option>
-                <option value="o1-mini">o1 Mini</option>
-                <option value="o3-mini">o3 Mini</option>
+                <option value="o3-mini">o3-mini (High Reasoning)</option>
+                <option value="o1">o1</option>
+                <option value="o1-mini">o1-mini</option>
+                <option value="gpt-4.5-preview">GPT-4.5 Preview</option>
+                <option value="chatgpt-4o-latest">ChatGPT-4o Latest</option>
                 <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                <option value="gpt-4">GPT-4</option>
-                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
               </select>
             </div>
             <div>
@@ -454,11 +423,11 @@ export default function ModelManager() {
                 onChange={e => setModelId(e.target.value)}
                 className="input input-lg font-mono"
               >
-                <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet (Latest)</option>
-                <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
+                <option value="claude-3-7-sonnet">Claude 3.7 Sonnet (Hybrid Reasoning / Latest)</option>
+                <option value="claude-3-5-sonnet-latest">Claude 3.5 Sonnet (Latest)</option>
+                <option value="claude-3-5-haiku-latest">Claude 3.5 Haiku</option>
+                <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet (20241022)</option>
                 <option value="claude-3-opus-20240229">Claude 3 Opus</option>
-                <option value="claude-3-sonnet-20240229">Claude 3 Sonnet</option>
-                <option value="claude-3-haiku-20240307">Claude 3 Haiku</option>
               </select>
             </div>
             <div>
@@ -494,9 +463,8 @@ export default function ModelManager() {
                 className="input input-lg font-mono"
               >
                 <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
-                <option value="llama-3.3-8b-versatile">Llama 3.3 8B Versatile</option>
-                <option value="llama-3.1-70b-versatile">Llama 3.1 70B Versatile</option>
                 <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
+                <option value="deepseek-r1-distill-llama-70b">DeepSeek R1 Distill Llama 70B</option>
                 <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
                 <option value="gemma2-9b-it">Gemma 2 9B</option>
               </select>
@@ -533,9 +501,11 @@ export default function ModelManager() {
                 onChange={e => setModelId(e.target.value)}
                 className="input input-lg font-mono"
               >
+                <option value="gemini-2.0-flash">Gemini 2.0 Flash (Fast & Multimodal / Latest)</option>
+                <option value="gemini-2.0-pro-exp-02-05">Gemini 2.0 Pro Experimental</option>
+                <option value="gemini-2.0-flash-thinking-exp">Gemini 2.0 Flash Thinking</option>
                 <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
                 <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-                <option value="gemini-1.0-pro">Gemini 1.0 Pro</option>
               </select>
             </div>
             <div>
@@ -727,100 +697,13 @@ export default function ModelManager() {
 
         {/* Direct GGUF */}
         {provider === 'gguf' && (
-          <div className="space-y-4">
-            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
-              <div className="flex items-center gap-2 mb-2">
-                <HardDrive size={18} className="text-[var(--accent-400)]" />
-                <span className="font-semibold text-[var(--fg-primary)]">Rajjo Direct GGUF Engine</span>
-              </div>
-              <p className="text-sm text-[var(--fg-secondary)]">
-                Directly execute any quantized .gguf model file from your SSD, HDD, Downloads, or external drive with zero directory setup. Supports CPU/GPU acceleration via llama.cpp.
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-xs text-[var(--fg-muted)] mb-1">Local GGUF File Path</label>
-              <div className="flex gap-2">
-                <input
-                  value={ggufPath}
-                  onChange={async e => {
-                    setGgufPath(e.target.value);
-                    const info = await validateGGUFPath(e.target.value);
-                    setGgufValidation(info);
-                  }}
-                  placeholder="D:\\Models\\llama-3-8b-instruct.Q4_K_M.gguf or /home/user/models/mistral-7b.q4_k_m.gguf"
-                  className="input input-lg font-mono flex-1"
-                />
-                <button
-                  onClick={handleSelectGGUF}
-                  className="btn btn-primary btn-lg gap-2 shrink-0"
-                >
-                  <FolderOpen size={16} />
-                  <span>Browse GGUF</span>
-                </button>
-              </div>
-            </div>
-
-            {ggufValidation && (
-              <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className={cn(
-                  'p-4 rounded-xl border text-sm',
-                  ggufValidation.valid
-                    ? 'bg-[var(--success-bg)] border-[var(--success-border)] text-[var(--success)]'
-                    : 'bg-[var(--danger-bg)] border-[var(--danger-border)] text-[var(--danger)]'
-                )}
-              >
-                {ggufValidation.valid ? (
-                  <div>
-                    <div className="flex items-center gap-2 font-semibold mb-1">
-                      <CheckCircle2 size={16} />
-                      Valid GGUF Model File Ready
-                    </div>
-                    <div className="text-xs text-[var(--fg-muted)] font-mono space-y-1">
-                      <div>File: {ggufValidation.filename}</div>
-                      <div>Size: {formatBytes(ggufValidation.size_bytes)}</div>
-                      {ggufValidation.arch && <div>Arch: {ggufValidation.arch}</div>}
-                      {ggufValidation.quantization && <div>Quant: {ggufValidation.quantization}</div>}
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <div className="flex items-center gap-2 font-semibold mb-1">
-                      <AlertCircle size={16} />
-                      GGUF File Notice
-                    </div>
-                    <div className="text-xs">{ggufValidation.error}</div>
-                  </div>
-                )}
-              </motion.div>
-            )}
-
-            {/* GGUF Settings */}
-            <div className="pt-4 border-t border-[var(--border-default)] grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-xs text-[var(--fg-muted)] mb-1">Context Window</label>
-                <select className="input input-lg font-mono" defaultValue="4096">
-                  <option value="2048">2048</option>
-                  <option value="4096">4096 (Default)</option>
-                  <option value="8192">8192</option>
-                  <option value="16384">16384</option>
-                  <option value="32768">32768</option>
-                  <option value="65536">65536</option>
-                  <option value="131072">131072</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-[var(--fg-muted)] mb-1">GPU Layers</label>
-                <input type="number" className="input input-lg font-mono" defaultValue="0" min="0" max="99" placeholder="0 = CPU only" />
-              </div>
-              <div>
-                <label className="block text-xs text-[var(--fg-muted)] mb-1">Threads</label>
-                <input type="number" className="input input-lg font-mono" defaultValue="0" min="0" max="64" placeholder="0 = Auto" />
-              </div>
-            </div>
-          </div>
+          <GGUFConfigSection
+            ggufPath={ggufPath}
+            setGgufPath={setGgufPath}
+            ggufValidation={ggufValidation}
+            setGgufValidation={setGgufValidation}
+            validateGGUFPath={validateGGUFPath}
+          />
         )}
 
         {/* Action Buttons */}
@@ -870,44 +753,7 @@ export default function ModelManager() {
       </motion.div>
 
       {/* Current Active Model Display */}
-      {modelsData && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="card p-4"
-        >
-          <h3 className="font-semibold text-[var(--fg-primary)] mb-3 flex items-center gap-2">
-            <Activity size={20} className="text-[var(--accent-400)]" />
-            Currently Active Configuration
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-            <div className="p-3 bg-[var(--bg-input)] rounded-xl">
-              <div className="text-xs text-[var(--fg-muted)]">Provider</div>
-              <div className="font-mono text-[var(--fg-primary)] font-semibold">{modelsData.active_provider?.toUpperCase()}</div>
-            </div>
-            <div className="p-3 bg-[var(--bg-input)] rounded-xl">
-              <div className="text-xs text-[var(--fg-muted)]">Model</div>
-              <div className="font-mono text-[var(--brand-400)] font-semibold truncate">{modelsData.active_model_id}</div>
-            </div>
-            <div className="p-3 bg-[var(--bg-input)] rounded-xl">
-              <div className="text-xs text-[var(--fg-muted)]">Endpoint</div>
-              <div className="font-mono text-[var(--fg-secondary)] truncate">
-                {modelsData.custom_base_url || (modelsData.ollama?.running ? 'Local Ollama' : 'Default')}
-              </div>
-            </div>
-            <div className="p-3 bg-[var(--bg-input)] rounded-xl">
-              <div className="text-xs text-[var(--fg-muted)]">GGUF Engine</div>
-              <div className="font-mono text-[var(--fg-secondary)]">
-                {modelsData.gguf?.model_path ? 'Loaded' : 'Not configured'}
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      )}
-
-      {/* State for cloud search */}
-      const [cloudSearch, setCloudSearch] = useState('');
+      <ActiveModelSummary modelsData={modelsData} />
     </div>
   );
 }
