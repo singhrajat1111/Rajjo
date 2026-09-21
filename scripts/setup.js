@@ -65,7 +65,28 @@ if (!fs.existsSync(venvPython)) {
 // 5. Upgrade pip & Install Backend requirements.txt
 const quotedPython = `"${venvPython}"`;
 runCommand('Upgrading pip in virtual environment', `${quotedPython} -m pip install --upgrade pip`, backendDir);
-runCommand('Installing Python dependencies from requirements.txt', `${quotedPython} -m pip install -r requirements.txt`, backendDir);
+
+console.log('\n▶ [Step] Installing Python dependencies from requirements.txt...');
+const installRes = spawnSync(`${quotedPython} -m pip install -r requirements.txt`, {
+  cwd: backendDir,
+  stdio: 'inherit',
+  shell: true,
+  env: process.env
+});
+
+if (installRes.status !== 0) {
+  console.warn('\n⚠️ Direct pip install encountered a warning/error (often due to optional llama-cpp-python C++ build requirements on non-wheel systems).');
+  console.log('Attempting resilient installation of core dependencies...');
+  const coreDeps = [
+    'fastapi', 'uvicorn', 'langgraph', 'langchain', 'langchain-openai',
+    'langchain-community', 'pydantic', 'python-dotenv', 'duckduckgo-search',
+    'playwright', 'chromadb', 'httpx', 'aiofiles', 'keyring', 'pytest'
+  ].join(' ');
+  runCommand('Installing core backend dependencies', `${quotedPython} -m pip install ${coreDeps}`, backendDir);
+  console.log('✅ Core dependencies successfully installed! (Note: Direct GGUF engine is optional and requires C++ build tools on some platforms).');
+} else {
+  console.log('✅ Python dependencies installed successfully.');
+}
 
 console.log('\n======================================================');
 console.log('🎉 Setup Complete! You can now start Rajjo:');

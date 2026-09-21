@@ -8,12 +8,14 @@ pydantic
 python-dotenv
 duckduckgo-search
 playwright
-pygetwindow
-pywinauto
 chromadb
-# llama-cpp-python is installed from the official prebuilt Windows wheel (no MSVC needed).
-# The PyPI release is source-only and would require a C++ compiler to build.
-llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.35/llama_cpp_python-0.3.35-py3-none-win_amd64.whl
 httpx
 aiofiles
 keyring
+pytest
+
+# Direct GGUF acceleration:
+# On Windows x86_64, use precompiled binary wheel (avoids requiring MSVC C++ Build Tools).
+# On Linux and macOS, install from PyPI (binary wheels provided for common architectures).
+llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.35/llama_cpp_python-0.3.35-py3-none-win_amd64.whl ; sys_platform == "win32" and platform_machine == "AMD64"
+llama-cpp-python ; sys_platform != "win32"
