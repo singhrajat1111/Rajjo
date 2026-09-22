@@ -2,26 +2,62 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const crypto = require('crypto');
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const isDev = !app.isPackaged;
 let mainWindow = null;
 let pythonProcess = null;
+let backendPort = 8000;
+let backendBaseUrl = 'http://127.0.0.1:8000';
+let isShuttingDown = false;
+
+// ----------------- Data Directory & Logging -----------------
+
+function getDataDir() {
+  if (process.env.RAJJO_DATA_DIR && process.env.RAJJO_DATA_DIR.trim()) {
+    return path.resolve(process.env.RAJJO_DATA_DIR.trim());
+  }
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Rajjo');
+  }
+  return path.join(os.homedir(), '.rajjo');
+}
+
+function getLogFile() {
+  const dataDir = getDataDir();
+  const logsDir = path.join(dataDir, 'logs');
+  if (!fs.existsSync(logsDir)) {
+    try {
+      fs.mkdirSync(logsDir, { recursive: true });
+    } catch (e) {
+      // Fallback
+    }
+  }
+  return path.join(logsDir, 'rajjo_electron.log');
+}
+
+function log(level, message, error = null) {
+  const ts = new Date().toISOString();
+  const errStr = error ? ` - ${error.stack || error}` : '';
+  const line = `[${ts}] [${level.toUpperCase()}] ${message}${errStr}\n`;
+  console.log(`[Electron ${level.toUpperCase()}] ${message}${errStr}`);
+  try {
+    fs.appendFileSync(getLogFile(), line, 'utf-8');
+  } catch (e) {
+    // Ignore logging write failures
+  }
+}
+
+// ----------------- Session Token Management -----------------
 
 function getOrCreateApiToken() {
   if (process.env.RAJJO_API_TOKEN && process.env.RAJJO_API_TOKEN.trim()) {
     return process.env.RAJJO_API_TOKEN.trim();
   }
-  let dataDir;
-  if (process.env.RAJJO_DATA_DIR) {
-    dataDir = process.env.RAJJO_DATA_DIR;
-  } else if (process.platform === 'win32') {
-    dataDir = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Rajjo');
-  } else {
-    dataDir = path.join(os.homedir(), '.rajjo');
-  }
+  const dataDir = getDataDir();
   const tokenFile = path.join(dataDir, '.session_token');
   try {
     if (fs.existsSync(tokenFile)) {
@@ -32,7 +68,7 @@ function getOrCreateApiToken() {
       }
     }
   } catch (e) {
-    console.error('[Electron] Error reading session token:', e);
+    log('error', 'Error reading existing session token', e);
   }
 
   const generated = crypto.randomBytes(32).toString('hex');
@@ -43,10 +79,37 @@ function getOrCreateApiToken() {
     }
     fs.writeFileSync(tokenFile, generated, { encoding: 'utf-8' });
   } catch (e) {
-    console.error('[Electron] Error writing session token:', e);
+    log('error', 'Error writing new session token', e);
   }
   return generated;
 }
+
+// ----------------- Port Probing -----------------
+
+function isPortAvailable(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', (err) => {
+      resolve(false);
+    });
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+async function findAvailablePort(startPort = 8000, maxAttempts = 50) {
+  for (let i = 0; i < maxAttempts; i++) {
+    const p = startPort + i;
+    if (await isPortAvailable(p)) {
+      return p;
+    }
+  }
+  return startPort;
+}
+
+// ----------------- Backend Process Lifecycle -----------------
 
 function findPythonExecutable() {
   const rootDir = path.join(__dirname, '..');
@@ -62,12 +125,12 @@ function findPythonExecutable() {
   return process.platform === 'win32' ? 'python' : 'python3';
 }
 
-function checkBackendHealth(retries = 30, interval = 500) {
+function checkBackendHealth(port, retries = 70, interval = 500) {
   return new Promise((resolve) => {
     let attempts = 0;
     const check = () => {
       attempts++;
-      const req = http.get('http://127.0.0.1:8000/health', (res) => {
+      const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
         if (res.statusCode === 200) {
           resolve(true);
         } else if (attempts < retries) {
@@ -83,7 +146,7 @@ function checkBackendHealth(retries = 30, interval = 500) {
           resolve(false);
         }
       });
-      req.setTimeout(1000, () => {
+      req.setTimeout(1200, () => {
         req.destroy();
         if (attempts < retries) {
           setTimeout(check, interval);
@@ -96,8 +159,10 @@ function checkBackendHealth(retries = 30, interval = 500) {
   });
 }
 
-function spawnPythonBackend() {
-  console.log('[Electron] Starting Python backend...');
+function spawnPythonBackend(port) {
+  backendPort = port;
+  backendBaseUrl = `http://127.0.0.1:${port}`;
+  log('info', `Spawning backend on port ${port} (mode: ${isDev ? 'development' : 'production'})`);
 
   const apiToken = getOrCreateApiToken();
   let scriptPath;
@@ -106,70 +171,84 @@ function spawnPythonBackend() {
 
   if (isDev) {
     scriptPath = findPythonExecutable();
-    args = ['main.py'];
+    const runScript = path.join(__dirname, '..', 'backend', 'run.py');
+    args = [runScript, '--port', String(port), '--host', '127.0.0.1'];
     options = {
       cwd: path.join(__dirname, '..', 'backend'),
       env: {
         ...process.env,
+        RAJJO_PORT: String(port),
+        RAJJO_HOST: '127.0.0.1',
         RAJJO_API_TOKEN: apiToken,
         PYTHONPATH: path.join(__dirname, '..'),
         PYTHONUNBUFFERED: '1'
       }
     };
-    console.log(`[Electron] Using Python interpreter: ${scriptPath}`);
+    log('info', `Using dev Python: ${scriptPath} with args: ${args.join(' ')}`);
   } else {
-    // Packaged production binary
+    // Packaged standalone executable
     scriptPath = path.join(process.resourcesPath, 'bin', 'rajjo_backend.exe');
-    args = [];
+    args = ['--port', String(port), '--host', '127.0.0.1'];
     options = {
       cwd: path.dirname(scriptPath),
       env: {
         ...process.env,
+        RAJJO_PORT: String(port),
+        RAJJO_HOST: '127.0.0.1',
         RAJJO_API_TOKEN: apiToken
       }
     };
-    console.log(`[Electron] Using packaged backend binary: ${scriptPath}`);
+    log('info', `Using packaged executable: ${scriptPath} with args: ${args.join(' ')}`);
   }
 
   try {
     pythonProcess = spawn(scriptPath, args, options);
+    log('info', `Backend process spawned with PID: ${pythonProcess.pid}`);
 
     pythonProcess.stdout.on('data', (data) => {
-      console.log(`[Python stdout] ${data.toString().trim()}`);
+      const line = data.toString().trim();
+      if (line) log('info', `[Backend stdout] ${line}`);
     });
 
     pythonProcess.stderr.on('data', (data) => {
-      console.error(`[Python stderr] ${data.toString().trim()}`);
+      const line = data.toString().trim();
+      if (line) log('warn', `[Backend stderr] ${line}`);
     });
 
     pythonProcess.on('error', (err) => {
-      console.error('[Electron] Failed to spawn Python backend process:', err);
+      log('error', 'Backend process spawn error', err);
     });
 
     pythonProcess.on('close', (code) => {
-      console.log(`[Electron] Python backend process exited with code ${code}`);
+      log('info', `Backend process closed with exit code ${code}`);
       pythonProcess = null;
     });
   } catch (err) {
-    console.error('[Electron] Exception while spawning backend:', err);
+    log('error', 'Exception occurred while spawning backend', err);
   }
 }
 
 function killPythonBackend() {
-  if (pythonProcess) {
-    console.log('[Electron] Terminating Python backend...');
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  if (pythonProcess && pythonProcess.pid) {
+    const pid = pythonProcess.pid;
+    log('info', `Terminating backend process tree (PID: ${pid})...`);
     try {
       if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', pythonProcess.pid, '/f', '/t']);
+        spawnSync('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true, stdio: 'ignore' });
       } else {
         pythonProcess.kill('SIGTERM');
       }
     } catch (e) {
-      console.error('[Electron] Error terminating backend:', e);
+      log('error', 'Error killing backend process tree', e);
     }
     pythonProcess = null;
   }
 }
+
+// ----------------- Window Creation -----------------
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -182,6 +261,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: false
     },
     backgroundColor: '#090A0F',
     title: 'Rajjo - Local Autonomous AI Agent'
@@ -189,19 +269,20 @@ function createWindow() {
 
   if (isDev) {
     mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-      console.log(`[Renderer Console L${level}] ${message} (${sourceId}:${line})`);
+      log('debug', `[Renderer L${level}] ${message} (${sourceId}:${line})`);
     });
     mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-      console.error(`[Renderer Failed Load] ${errorCode} - ${errorDescription} on ${validatedURL}`);
+      log('error', `Renderer failed to load ${validatedURL}: ${errorCode} - ${errorDescription}`);
       const distIndex = path.join(__dirname, '..', 'frontend', 'dist', 'index.html');
       if (fs.existsSync(distIndex)) {
-        console.log('[Electron] Dev server unreachable; falling back to dist/index.html');
+        log('info', 'Dev server unreachable; falling back to packaged dist/index.html');
         mainWindow.loadFile(distIndex);
       }
     });
     mainWindow.loadURL('http://localhost:5173');
   } else {
-    mainWindow.loadFile(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'));
+    const prodIndex = path.join(__dirname, '..', 'frontend', 'dist', 'index.html');
+    mainWindow.loadFile(prodIndex);
   }
 
   mainWindow.on('closed', () => {
@@ -255,20 +336,55 @@ ipcMain.handle('get-api-token', async () => {
   return getOrCreateApiToken();
 });
 
+ipcMain.handle('get-api-base', async () => {
+  return backendBaseUrl;
+});
+
+ipcMain.handle('get-api-port', async () => {
+  return backendPort;
+});
+
 // ----------------- App Lifecycle -----------------
 
 app.whenReady().then(async () => {
-  // In development, if backend is already running (e.g. started via npm run dev), check health first
-  const alreadyRunning = await checkBackendHealth(2, 200);
-  if (!alreadyRunning) {
-    spawnPythonBackend();
+  log('info', `Rajjo application starting (v${app.getVersion()}, isPackaged: ${app.isPackaged})`);
+
+  // 1. Determine available port
+  let chosenPort = 8000;
+  if (isDev) {
+    // In dev, check if 8000 is already running and healthy (e.g. launched via npm run dev)
+    const is8000Healthy = await checkBackendHealth(8000, 2, 200);
+    if (is8000Healthy) {
+      log('info', 'Existing backend service detected on port 8000 in dev mode');
+      chosenPort = 8000;
+    } else {
+      chosenPort = await findAvailablePort(8000, 30);
+      spawnPythonBackend(chosenPort);
+    }
+  } else {
+    // In production, find available port and spawn bundled binary
+    chosenPort = await findAvailablePort(8000, 30);
+    spawnPythonBackend(chosenPort);
   }
 
-  // Wait for health check before opening UI
-  console.log('[Electron] Awaiting backend health check...');
-  const isHealthy = await checkBackendHealth(30, 500);
-  console.log(`[Electron] Backend health status: ${isHealthy ? 'READY' : 'TIMEOUT'}`);
+  backendPort = chosenPort;
+  backendBaseUrl = `http://127.0.0.1:${chosenPort}`;
 
+  // 2. Wait for backend health check
+  log('info', `Awaiting backend readiness at ${backendBaseUrl}/health...`);
+  const isHealthy = await checkBackendHealth(chosenPort, 70, 500);
+
+  if (!isHealthy) {
+    log('error', `Backend failed to become healthy at ${backendBaseUrl} within 35s`);
+    dialog.showErrorBox(
+      'Rajjo Backend Startup Failure',
+      `The local Rajjo AI backend service failed to respond at ${backendBaseUrl}.\n\nPlease check the logs at:\n${getLogFile()}`
+    );
+  } else {
+    log('info', `Backend confirmed healthy at ${backendBaseUrl}!`);
+  }
+
+  // 3. Create window
   createWindow();
 
   app.on('activate', () => {
@@ -277,12 +393,18 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  log('info', 'App before-quit triggered; cleaning up backend...');
   killPythonBackend();
 });
 
 app.on('window-all-closed', () => {
+  log('info', 'All windows closed; cleaning up backend...');
   killPythonBackend();
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+process.on('exit', () => {
+  killPythonBackend();
 });

@@ -331,24 +331,47 @@ NO_PROXY=localhost,127.0.0.1,.local
 
 ---
 
-## 📦 Production Packaging
+## 📦 Production Packaging & Standalone Desktop Installer
 
-### 1. Build Production Frontend
-```bash
-npm run build:frontend
-```
+Rajjo is packaged as a **zero-dependency, single-file Windows installer** (`Rajjo-Setup-2.0.0.exe`). End-users do not need to install Git, Python, Node.js, npm, or configure virtual environments.
 
-### 2. Build Production Backend Binary
-```bash
-npm run build:backend
-```
-Uses PyInstaller to generate `backend/dist/rajjo_backend.exe`.
+### 🌟 End-User Experience
+1. Download `Rajjo-Setup-2.0.0.exe`.
+2. Run the NSIS setup wizard (installs to `%LOCALAPPDATA%\Programs\Rajjo` with Desktop & Start Menu shortcuts).
+3. Launch **Rajjo** from the Start Menu or Desktop.
+4. Electron automatically launches the bundled, self-contained AI backend binary (`rajjo_backend.exe`), dynamically allocates a free port (probing 8000–8050), verifies the `/health` endpoint, and connects the user interface.
+5. Closing Rajjo automatically terminates the backend process tree via synchronous process management, guaranteeing zero orphaned processes.
 
-### 3. Build Windows Installer (NSIS)
+### 📁 Production Runtime Layout (`%APPDATA%\Rajjo`)
+All mutable application state, databases, logs, and user files are isolated to `%APPDATA%\Rajjo`:
+- `workspace/`: Default workspace for autonomous file and coding tasks.
+- `rajjo.db`: SQLite database for episodic task memory and chat sessions.
+- `vectorstore/`: Semantic vector store for long-term knowledge and learned facts.
+- `logs/`: Production logs (`rajjo_backend.log`, `rajjo_electron.log`).
+- `config.json` & OS Keyring: Encrypted credentials and application settings.
+
+### 🛠️ Developer Build Instructions
+
+#### Complete Installer Build (All-In-One)
 ```bash
 npm run dist
 ```
-Generates the installable package in the `dist/` directory.
+This single command:
+1. Compiles the React + Vite frontend into optimized static production chunks (`npm run build:frontend`).
+2. Packages the Python FastAPI + LangGraph backend into a standalone native binary (`rajjo_backend.exe`) using PyInstaller (`npm run build:backend`).
+3. Uses `electron-builder` to bundle the Electron shell, frontend assets, and backend executable into an NSIS Windows installer: `dist/Rajjo-Setup-2.0.0.exe` (~183 MB).
+
+#### Individual Component Builds
+```bash
+# Build React frontend only:
+npm run build:frontend
+
+# Build standalone Python backend binary only:
+npm run build:backend
+
+# Test the packaged app without creating an installer:
+npx electron-builder --dir
+```
 
 ---
 

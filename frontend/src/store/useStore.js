@@ -1,8 +1,31 @@
 import { create } from 'zustand';
 
-const API_BASE = 'http://127.0.0.1:8000';
-
+let currentApiBase = 'http://127.0.0.1:8000';
+export const API_BASE = 'http://127.0.0.1:8000';
 let cachedApiToken = null;
+
+export async function getApiBase() {
+  if (window.electronAPI && typeof window.electronAPI.getApiBase === 'function') {
+    try {
+      const base = await window.electronAPI.getApiBase();
+      if (base) {
+        currentApiBase = base;
+        return base;
+      }
+    } catch (e) {
+      console.error('Error fetching api base from electron:', e);
+    }
+  }
+  return currentApiBase;
+}
+
+export function setApiBase(base) {
+  if (base) currentApiBase = base;
+}
+
+export function getCachedApiBase() {
+  return currentApiBase;
+}
 
 export async function getApiToken() {
   if (cachedApiToken) return cachedApiToken;
@@ -32,12 +55,21 @@ export function setApiToken(token) {
 
 export async function authFetch(url, options = {}) {
   const token = await getApiToken();
+  const base = await getApiBase();
   const headers = new Headers(options.headers || {});
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
     headers.set('X-Rajjo-Token', token);
   }
-  return fetch(url, { ...options, headers });
+
+  let finalUrl = url;
+  if (url.startsWith('/')) {
+    finalUrl = `${base}${url}`;
+  } else if (url.startsWith('http://127.0.0.1:8000') || url.startsWith('http://localhost:8000')) {
+    finalUrl = url.replace(/^http:\/\/(127\.0\.0\.1|localhost):8000/, base);
+  }
+
+  return fetch(finalUrl, { ...options, headers });
 }
 
 export const useStore = create((set, get) => ({

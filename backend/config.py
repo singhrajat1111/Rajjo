@@ -37,8 +37,26 @@ MCP_DIR = DATA_DIR / "mcp"
 for d in [MEMORY_DIR, VECTOR_STORE_DIR, LOGS_DIR, SCREENSHOTS_DIR, MCP_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-# Project Root Directory
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Detect Frozen PyInstaller Production Environment
+IS_FROZEN = getattr(sys, "frozen", False)
+
+# Setup Production Logging if Running Headless/Frozen
+def _setup_production_logging():
+    if IS_FROZEN or sys.stdout is None or sys.stderr is None:
+        log_file = LOGS_DIR / "rajjo_backend.log"
+        try:
+            f = open(log_file, "a", encoding="utf-8", buffering=1)
+            sys.stdout = f
+            sys.stderr = f
+        except Exception:
+            pass
+
+_setup_production_logging()
+
+# Project Root & Workspace Directory
+PROJECT_ROOT = Path(sys.executable).resolve().parent if IS_FROZEN else Path(__file__).resolve().parent.parent
+DEFAULT_WORKSPACE_DIR = (DATA_DIR / "workspace") if IS_FROZEN else PROJECT_ROOT
+DEFAULT_WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Default Settings
 DEFAULT_SETTINGS = {
@@ -48,7 +66,7 @@ DEFAULT_SETTINGS = {
     "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
     "gguf_model_path": "",
     "data_dir": str(DATA_DIR),
-    "workspace_dir": str(PROJECT_ROOT),
+    "workspace_dir": str(DEFAULT_WORKSPACE_DIR),
     "max_iterations": 10,
     "shell_timeout": 30,
     "shell_confirm_destructive": True,
@@ -94,7 +112,7 @@ def get_workspace_dir() -> Path:
                 return p
         except Exception:
             pass
-    return PROJECT_ROOT
+    return DEFAULT_WORKSPACE_DIR
 
 # ----------------- Session Token Management -----------------
 def get_or_create_session_token() -> str:
