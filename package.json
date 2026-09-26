@@ -31,7 +31,13 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "assets/logo.ico"
+      "icon": "assets/logo.ico",
+      "extraResources": [
+        {
+          "from": "backend/dist/rajjo_backend.exe",
+          "to": "bin/rajjo_backend.exe"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -42,12 +48,33 @@
       "shortcutName": "Rajjo",
       "artifactName": "Rajjo-Setup-${version}.${ext}"
     },
-    "extraResources": [
-      {
-        "from": "backend/dist/rajjo_backend.exe",
-        "to": "bin/rajjo_backend.exe"
-      }
-    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity",
+      "artifactName": "Rajjo-${version}-mac.${ext}",
+      "extraResources": [
+        {
+          "from": "backend/dist/rajjo_backend",
+          "to": "bin/rajjo_backend"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "artifactName": "Rajjo-${version}-linux.${ext}",
+      "extraResources": [
+        {
+          "from": "backend/dist/rajjo_backend",
+          "to": "bin/rajjo_backend"
+        }
+      ]
+    },
     "files": [
       "electron/**/*",
       "frontend/dist/**/*",

@@ -187,10 +187,14 @@ function spawnPythonBackend(port) {
     log('info', `Using dev Python: ${scriptPath} with args: ${args.join(' ')}`);
   } else {
     // Packaged standalone executable
-    scriptPath = path.join(process.resourcesPath, 'bin', 'rajjo_backend.exe');
+    const binaryName = process.platform === 'win32' ? 'rajjo_backend.exe' : 'rajjo_backend';
+    const primaryPath = path.join(process.resourcesPath, 'bin', binaryName);
+    const fallbackDistPath = path.join(__dirname, '..', 'backend', 'dist', binaryName);
+    scriptPath = fs.existsSync(primaryPath) ? primaryPath : fallbackDistPath;
     args = ['--port', String(port), '--host', '127.0.0.1'];
     options = {
       cwd: path.dirname(scriptPath),
+      detached: process.platform !== 'win32',
       env: {
         ...process.env,
         RAJJO_PORT: String(port),
@@ -199,6 +203,10 @@ function spawnPythonBackend(port) {
       }
     };
     log('info', `Using packaged executable: ${scriptPath} with args: ${args.join(' ')}`);
+  }
+
+  if (isDev && process.platform !== 'win32') {
+    options.detached = true;
   }
 
   try {
@@ -239,7 +247,24 @@ function killPythonBackend() {
       if (process.platform === 'win32') {
         spawnSync('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true, stdio: 'ignore' });
       } else {
-        pythonProcess.kill('SIGTERM');
+        // Unix: Kill entire process group (negative PID) to avoid orphan child processes (e.g. Playwright)
+        try {
+          process.kill(-pid, 'SIGTERM');
+          // Escalate to SIGKILL if processes remain active after grace period
+          setTimeout(() => {
+            try {
+              process.kill(-pid, 'SIGKILL');
+            } catch (_) {}
+          }, 1500).unref();
+        } catch (groupErr) {
+          // Fallback to tree pkill and direct process signal
+          try {
+            spawnSync('pkill', ['-TERM', '-P', String(pid)], { stdio: 'ignore' });
+          } catch (_) {}
+          try {
+            pythonProcess.kill('SIGTERM');
+          } catch (_) {}
+        }
       }
     } catch (e) {
       log('error', 'Error killing backend process tree', e);
@@ -261,7 +286,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false
+      sandbox: true
     },
     backgroundColor: '#090A0F',
     title: 'Rajjo - Local Autonomous AI Agent'

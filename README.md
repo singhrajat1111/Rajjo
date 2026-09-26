@@ -358,8 +358,11 @@ npm run dist
 ```
 This single command:
 1. Compiles the React + Vite frontend into optimized static production chunks (`npm run build:frontend`).
-2. Packages the Python FastAPI + LangGraph backend into a standalone native binary (`rajjo_backend.exe`) using PyInstaller (`npm run build:backend`).
-3. Uses `electron-builder` to bundle the Electron shell, frontend assets, and backend executable into an NSIS Windows installer: `dist/Rajjo-Setup-2.0.0.exe` (~183 MB).
+2. Packages the Python FastAPI + LangGraph backend into a standalone native binary (`rajjo_backend.exe` on Windows or `rajjo_backend` on macOS/Linux) using PyInstaller (`npm run build:backend`).
+3. Uses `electron-builder` to bundle the Electron shell, frontend assets, and backend executable into an installer (`dist/Rajjo-Setup-2.0.0.exe` on Windows, or DMG/AppImage on macOS/Linux).
+
+> [!NOTE]
+> **Platform Support & Packaging Status**: Development mode (`npm run dev`) is fully cross-platform across Windows, macOS, and Linux. For packaged production releases (`npm run dist`), Windows (NSIS installer) is production-ready and fully tested; macOS (.dmg) and Linux (.AppImage) build targets are configured with platform-aware binary resolution and are undergoing active multi-platform CI/staging validation.
 
 #### Individual Component Builds
 ```bash
