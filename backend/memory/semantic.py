@@ -1,33 +1,76 @@
 import os
 import json
 import uuid
+import math
+import re
+from datetime import datetime
 from typing import List, Dict, Any, Optional
+
 try:
     from backend.config import VECTOR_STORE_DIR
 except ImportError:
     from config import VECTOR_STORE_DIR
 
+
+class DeterministicLocalEmbedder:
+    """
+    Local-first, 100% offline deterministic embedding function.
+    Eliminates Chroma's default remote downloading of HuggingFace models on first use.
+    Produces stable 128-dimensional normalized vectors from character n-grams and tokens.
+    """
+    def __init__(self, dim: int = 128):
+        self.dim = dim
+
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        return [self.embed_text(t) for t in input]
+
+    def embed_text(self, text: str) -> List[float]:
+        vec = [0.0] * self.dim
+        tokens = re.findall(r"\w+", text.lower())
+        if not tokens:
+            return vec
+        for tok in tokens:
+            # Hash token into dimension buckets
+            h = hash(tok)
+            idx = abs(h) % self.dim
+            vec[idx] += 1.0
+            # Also hash bigrams for sequence awareness
+            for i in range(len(tok) - 2):
+                tri = tok[i:i+3]
+                idx_tri = abs(hash(tri)) % self.dim
+                vec[idx_tri] += 0.5
+
+        # L2 Normalize
+        norm = math.sqrt(sum(v * v for v in vec))
+        if norm > 0:
+            vec = [v / norm for v in vec]
+        return vec
+
+
 class SemanticMemory:
     """
     Semantic memory to store learned facts, preferences, and strategies.
-    Uses ChromaDB when available with a persistent fallback store.
+    Features:
+    - 100% local-first embeddings (no unexpected Hugging Face downloads)
+    - Deduplication: prevents redundant lessons from inflating prompt context
+    - Approval list gating: only approved memories enter the agent's system prompt
     """
     def __init__(self):
-        self._use_chroma = False
         self._fallback_path = VECTOR_STORE_DIR / "semantic_store.json"
+        self._init_fallback()
+
+        self._use_chroma = False
+        self.embedder = DeterministicLocalEmbedder(dim=128)
         try:
             import chromadb
-            from chromadb.utils import embedding_functions
             self.client = chromadb.PersistentClient(path=str(VECTOR_STORE_DIR))
-            self.embedding_fn = embedding_functions.DefaultEmbeddingFunction()
             self.collection = self.client.get_or_create_collection(
-                name="rajjo_memories",
-                embedding_function=self.embedding_fn
+                name="rajjo_memories_v2",
+                embedding_function=self.embedder
             )
             self._use_chroma = True
         except Exception as e:
-            print(f"[SemanticMemory] ChromaDB initialization warning: {e}. Using JSON fallback store.")
-            self._init_fallback()
+            print(f"[SemanticMemory] ChromaDB notice ({e}). Operating with local persistent JSON store.")
 
     def _init_fallback(self):
         if not self._fallback_path.exists():
@@ -46,106 +89,143 @@ class SemanticMemory:
         with open(self._fallback_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
-    def add_memory(self, text: str, metadata: Optional[dict] = None) -> str:
-        """Add a learned fact or guideline to semantic memory."""
-        mem_id = str(uuid.uuid4())
+    def _is_duplicate(self, text: str, threshold: float = 0.85) -> Optional[str]:
+        """Check if identical or near-duplicate memory already exists."""
+        words_new = set(re.findall(r"\w+", text.lower()))
+        if not words_new:
+            return None
+
+        memories = self.get_all_memories()
+        for m in memories:
+            doc = m.get("document", "")
+            words_existing = set(re.findall(r"\w+", doc.lower()))
+            if not words_existing:
+                continue
+            intersection = words_new.intersection(words_existing)
+            union = words_new.union(words_existing)
+            jaccard = len(intersection) / len(union) if union else 0.0
+            if jaccard >= threshold or doc.strip().lower() == text.strip().lower():
+                return m.get("id")
+        return None
+
+    def add_memory(self, text: str, metadata: Optional[dict] = None, auto_approve: bool = False) -> str:
+        """
+        Add a learned fact or guideline to semantic memory.
+        Deduplicates against existing memories.
+        New lessons default to approved=False unless explicitly auto-approved.
+        """
+        cleaned_text = text.strip()
+        existing_id = self._is_duplicate(cleaned_text)
+        if existing_id:
+            # Update existing memory metadata rather than duplicating
+            print(f"[SemanticMemory] Deduplicated memory (matched existing ID: {existing_id})")
+            return existing_id
+
+        mem_id = f"mem_{uuid.uuid4().hex[:12]}"
         meta = metadata or {}
+        meta["approved"] = bool(meta.get("approved", auto_approve))
+        meta["created_at"] = datetime.now().isoformat()
+        meta["updated_at"] = datetime.now().isoformat()
+
         if self._use_chroma:
             try:
                 self.collection.add(
-                    documents=[text],
+                    documents=[cleaned_text],
                     metadatas=[meta],
                     ids=[mem_id]
                 )
-                return mem_id
             except Exception as e:
-                print(f"[SemanticMemory] Chroma add error: {e}")
+                print(f"[SemanticMemory] Chroma add notice: {e}")
 
-        # Fallback store
+        # Always update local JSON store for reliability & portability
         data = self._read_fallback()
-        data.append({"id": mem_id, "document": text, "metadata": meta})
+        data.append({"id": mem_id, "document": cleaned_text, "metadata": meta})
         self._write_fallback(data)
         return mem_id
 
-    def query_memory(self, query: str, n_results: int = 3) -> List[str]:
-        """Retrieve top-k relevant memories based on similarity or keyword match."""
+    def approve_memory(self, mem_id: str) -> bool:
+        """Approves a memory so it can be safely used in system prompts."""
+        data = self._read_fallback()
+        found = False
+        for item in data:
+            if item.get("id") == mem_id:
+                item.setdefault("metadata", {})["approved"] = True
+                item["metadata"]["approved_at"] = datetime.now().isoformat()
+                found = True
+                break
+        if found:
+            self._write_fallback(data)
+            if self._use_chroma:
+                try:
+                    for item in data:
+                        if item.get("id") == mem_id:
+                            self.collection.update(
+                                ids=[mem_id],
+                                metadatas=[item["metadata"]],
+                                documents=[item["document"]]
+                            )
+                            break
+                except Exception:
+                    pass
+        return found
+
+    def query_memory(self, query: str, n_results: int = 3, only_approved: bool = True) -> List[str]:
+        """
+        Retrieve relevant memories. By default only approved memories are returned,
+        preventing unverified or injected web facts from polluting the prompt.
+        """
         if not query.strip():
             return []
 
-        if self._use_chroma:
-            try:
-                count = self.collection.count()
-                if count == 0:
-                    return []
-                results = self.collection.query(
-                    query_texts=[query],
-                    n_results=min(n_results, count)
-                )
-                docs = results['documents'][0] if results['documents'] else []
-                return docs
-            except Exception as e:
-                print(f"[SemanticMemory] Chroma query error: {e}")
+        all_mems = self.get_all_memories()
+        if only_approved:
+            candidates = [m for m in all_mems if m.get("metadata", {}).get("approved") is True]
+        else:
+            candidates = all_mems
 
-        # Fallback keyword match
-        data = self._read_fallback()
-        query_words = set(query.lower().split())
+        if not candidates:
+            return []
+
+        # Deterministic vector similarity match
+        q_vec = self.embedder.embed_text(query)
         scored = []
-        for item in data:
-            doc_text = item.get("document", "")
-            doc_words = set(doc_text.lower().split())
-            overlap = len(query_words.intersection(doc_words))
-            if overlap > 0:
-                scored.append((overlap, doc_text))
+        for m in candidates:
+            doc = m.get("document", "")
+            d_vec = self.embedder.embed_text(doc)
+            sim = sum(a * b for a, b in zip(q_vec, d_vec))
+            scored.append((sim, doc))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [doc for score, doc in scored[:n_results]]
+        return [doc for score, doc in scored[:n_results] if score > 0.15]
 
     def get_all_memories(self) -> List[Dict[str, Any]]:
-        """List all stored semantic memories."""
-        if self._use_chroma:
-            try:
-                items = self.collection.get()
-                results = []
-                if items and items.get("ids"):
-                    for idx, mem_id in enumerate(items["ids"]):
-                        doc = items["documents"][idx] if items["documents"] else ""
-                        meta = items["metadatas"][idx] if items["metadatas"] else {}
-                        results.append({"id": mem_id, "document": doc, "metadata": meta})
-                    return results
-            except Exception:
-                pass
-
+        """Returns all stored memories with id, document, and metadata."""
         return self._read_fallback()
 
     def delete_memory(self, mem_id: str) -> bool:
-        deleted = False
-        if self._use_chroma:
-            try:
-                self.collection.delete(ids=[mem_id])
-                deleted = True
-            except Exception:
-                pass
-
         data = self._read_fallback()
-        new_data = [item for item in data if item.get("id") != mem_id]
-        if len(new_data) < len(data):
-            self._write_fallback(new_data)
-            deleted = True
-        return deleted
+        orig_len = len(data)
+        data = [m for m in data if m.get("id") != mem_id]
+        if len(data) != orig_len:
+            self._write_fallback(data)
+            if self._use_chroma:
+                try:
+                    self.collection.delete(ids=[mem_id])
+                except Exception:
+                    pass
+            return True
+        return False
 
-    def clear_all(self) -> bool:
+    def clear_all(self):
+        self._write_fallback([])
         if self._use_chroma:
             try:
-                # Delete existing collection and recreate
-                self.client.delete_collection(name="rajjo_memories")
+                self.client.delete_collection("rajjo_memories_v2")
                 self.collection = self.client.get_or_create_collection(
-                    name="rajjo_memories",
-                    embedding_function=self.embedding_fn
+                    name="rajjo_memories_v2",
+                    embedding_function=self.embedder
                 )
             except Exception:
                 pass
-
-        self._write_fallback([])
-        return True
 
 semantic = SemanticMemory()

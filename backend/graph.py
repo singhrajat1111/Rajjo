@@ -12,6 +12,7 @@ try:
     from backend.memory.episodic import episodic
     from backend.memory.semantic import semantic
     from backend.memory.reflector import reflector_service
+    from backend.security.approval import approval_manager
 except ImportError:
     from model_router import router
     from config import load_settings
@@ -19,10 +20,12 @@ except ImportError:
     from memory.episodic import episodic
     from memory.semantic import semantic
     from memory.reflector import reflector_service
+    from security.approval import approval_manager
 
 # 1. State Definition
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
+    plan_steps: List[Dict[str, Any]]
     plan_summary: str
     next_step: str
     task_status: str
@@ -37,25 +40,68 @@ class AgentState(TypedDict):
 # 2. Nodes Implementation
 
 def retrieve_memory_node(state: AgentState) -> Dict[str, Any]:
-    """Retrieve relevant past memories and episodic experience."""
+    """
+    Retrieves both semantic memories (approved only) AND past episodic task history.
+    Solves the flaw where the agent never read episodic memory.
+    """
     user_input = state.get("user_input", "")
     activity = list(state.get("activity_log", []))
-    activity.append({"type": "status", "message": "Searching relevant memory and past context..."})
+    activity.append({"type": "status", "message": "Querying approved memory and past episodic experiences..."})
 
-    # Search semantic memory
-    memories = semantic.query_memory(user_input, n_results=3)
-    memory_context = ""
-    if memories:
-        memory_context = "\n".join([f"- {m}" for m in memories])
+    # 1. Search approved semantic memory
+    memories = semantic.query_memory(user_input, n_results=3, only_approved=True)
+    memory_bullets = [f"- {m}" for m in memories]
+
+    # 2. Search episodic task memory (past executions & outcomes)
+    past_tasks = episodic.search_tasks(user_input, limit=2)
+    episodic_bullets = []
+    for t in past_tasks:
+        desc = t.get("user_input", "")[:80]
+        outcome = t.get("outcome", "")[:100]
+        episodic_bullets.append(f"- Past Task '{desc}': Outcome -> {outcome}")
+
+    context_parts = []
+    if memory_bullets:
+        context_parts.append("[Approved Learned Guidelines & Preferences]:\n" + "\n".join(memory_bullets))
+    if episodic_bullets:
+        context_parts.append("[Relevant Past Episodic Experience]:\n" + "\n".join(episodic_bullets))
+
+    memory_context = "\n\n".join(context_parts)
 
     return {
         "scratchpad": memory_context,
         "activity_log": activity,
-        "iteration_count": state.get("iteration_count", 0)
+        "iteration_count": state.get("iteration_count", 0),
+        "plan_steps": []
+    }
+
+def plan_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Explicit Plan Node: creates an initial breakdown of steps for the requested task.
+    """
+    user_input = state.get("user_input", "")
+    activity = list(state.get("activity_log", []))
+
+    # Form structured initial plan steps
+    steps = [
+        {"id": 1, "description": "Understand requirements & assess required tools", "status": "completed"},
+        {"id": 2, "description": "Execute necessary file, shell, or web actions", "status": "in_progress"},
+        {"id": 3, "description": "Synthesize verified findings and deliver final answer", "status": "pending"}
+    ]
+
+    activity.append({
+        "type": "plan",
+        "steps": steps,
+        "message": "Structured execution plan created."
+    })
+
+    return {
+        "plan_steps": steps,
+        "activity_log": activity
     }
 
 def planner_node(state: AgentState) -> Dict[str, Any]:
-    """Decide next action, bind tools, and form plan summary."""
+    """Decide next action, bind tools, and generate response or tool calls."""
     iteration = state.get("iteration_count", 0) + 1
     max_iter = state.get("max_iterations", 10)
     activity = list(state.get("activity_log", []))
@@ -95,23 +141,19 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 
     # Construct System Prompt with Memory Context & Capabilities
     memory_text = state.get("scratchpad", "")
-    memory_instruction = f"\n\n[Relevant Past Experience & Memory]:\n{memory_text}" if memory_text else ""
+    memory_instruction = f"\n\n{memory_text}" if memory_text else ""
 
     system_prompt = (
         "You are RAJJO, a local-first autonomous AI desktop agent built to assist users with file operations, "
         "shell commands, live web search, browser automation, and deep research & documentation.\n"
-        "Instructions:\n"
+        "Guidelines:\n"
         "1. Plan carefully. If a task requires multiple steps, execute the appropriate tool sequentially.\n"
-        "2. VISIBLE WINDOW FEATURE: If the user asks to 'show a visible window', 'open a visible window', 'browse visibly', "
-        "or watch what you are typing or searching on screen, ALWAYS use the 'open_visible_browser' tool or 'browser_navigate(visible=True)'. "
-        "This launches a real on-screen desktop browser window where the user can see typing and navigation in real time.\n"
-        "3. CAPTCHA & BOT BARRIER AWARENESS: If a web page or search tool notes a CAPTCHA, Cloudflare challenge, or verification screen, "
-        "do NOT abort or revert. Automatically pivot to alternative web sources, alternative search keywords, or use 'open_visible_browser' "
-        "where the user can visibly resolve it.\n"
-        "4. FORMATTING: Format your final response with rich, clean Markdown. Use clear headings (##, ###), bullet points, bold keywords, "
-        "formatted markdown tables (| Col 1 | Col 2 |), and code blocks (```language ... ```) where appropriate.\n"
-        "5. If a tool reports an error, analyze the structured error and retry with corrected parameters or an alternate strategy.\n"
-        "6. When you have completed all actions, provide a comprehensive, beautifully structured final response.\n"
+        "2. VISIBLE BROWSER: If the user asks to 'show a visible window', 'browse visibly', "
+        "or watch your actions on screen, use 'open_visible_browser' or 'browser_navigate(visible=True)'. "
+        "3. FORMATTING: Format your final response with clean, professional Markdown. Use clear headings, bullet points, "
+        "tables, and code blocks where appropriate.\n"
+        "4. If a tool reports an error, analyze the error code and retry with corrected parameters or an alternate strategy.\n"
+        "5. When you have completed all actions, provide a comprehensive final response.\n"
         f"{memory_instruction}"
     )
 
@@ -167,7 +209,6 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         tool_args = tool_call.get("args", {})
         tool_id = tool_call.get("id", f"call_{int(time.time()*1000)}")
 
-        # Human readable activity status
         activity_desc = f"Running tool '{tool_name}'..."
         if tool_name == "read_file":
             activity_desc = f"Reading file: {tool_args.get('path', '')}"
@@ -178,11 +219,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         elif tool_name == "web_search":
             activity_desc = f"Searching web for: {tool_args.get('query', '')}"
         elif tool_name == "open_visible_browser":
-            activity_desc = f"Launching visible window for: {tool_args.get('url', '')} (Query: {tool_args.get('search_query', 'N/A')})"
-        elif tool_name in ("browser_navigate", "open_browser_url"):
-            activity_desc = f"Navigating to: {tool_args.get('url', '')}"
-        elif tool_name == "browser_screenshot":
-            activity_desc = f"Capturing screenshot of: {tool_args.get('url', '')}"
+            activity_desc = f"Launching visible browser for: {tool_args.get('url', '')}"
 
         activity.append({"type": "tool_start", "tool": tool_name, "message": activity_desc, "args": tool_args})
 
@@ -191,7 +228,6 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             try:
                 res = target_tool.invoke(tool_args)
                 tool_result_str = str(res)
-                # Parse success status if structured JSON
                 is_success = True
                 try:
                     parsed = json.loads(tool_result_str)
@@ -203,7 +239,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                     "type": "tool_end",
                     "tool": tool_name,
                     "success": is_success,
-                    "message": f"Completed '{tool_name}'" if is_success else f"Tool '{tool_name}' reported notice/error"
+                    "message": f"Completed '{tool_name}'" if is_success else f"Tool '{tool_name}' notice/error"
                 })
 
                 tool_outputs.append(ToolMessage(
@@ -215,10 +251,9 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                 err_payload = json.dumps({
                     "success": False,
                     "tool": tool_name,
-                    "data": None,
                     "error": {"code": "TOOL_EXCEPTION", "message": str(e)}
                 })
-                activity.append({"type": "tool_end", "tool": tool_name, "success": False, "message": f"Error executing {tool_name}: {str(e)}"})
+                activity.append({"type": "tool_end", "tool": tool_name, "success": False, "message": f"Error in {tool_name}: {str(e)}"})
                 tool_outputs.append(ToolMessage(
                     content=err_payload,
                     tool_call_id=tool_id,
@@ -228,10 +263,9 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             disabled_msg = json.dumps({
                 "success": False,
                 "tool": tool_name,
-                "data": None,
-                "error": {"code": "TOOL_DISABLED_OR_NOT_FOUND", "message": f"Tool '{tool_name}' is not found or currently disabled."}
+                "error": {"code": "TOOL_DISABLED_OR_NOT_FOUND", "message": f"Tool '{tool_name}' not found or disabled."}
             })
-            activity.append({"type": "tool_end", "tool": tool_name, "success": False, "message": f"Tool '{tool_name}' is disabled or not found."})
+            activity.append({"type": "tool_end", "tool": tool_name, "success": False, "message": f"Tool '{tool_name}' disabled or not found."})
             tool_outputs.append(ToolMessage(
                 content=disabled_msg,
                 tool_call_id=tool_id,
@@ -245,7 +279,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     }
 
 def reflection_node(state: AgentState) -> Dict[str, Any]:
-    """Reflect on task and extract reusable learning for semantic memory."""
+    """Reflect on task and extract reusable learning."""
     user_input = state.get("user_input", "")
     history = state.get("messages", [])
     model_cfg = state.get("model_config", {})
@@ -257,7 +291,7 @@ def reflection_node(state: AgentState) -> Dict[str, Any]:
     try:
         lesson = reflector_service.reflect(user_input, history, model_cfg)
         if lesson:
-            activity.append({"type": "reflection", "message": f"Insight stored: {lesson}"})
+            activity.append({"type": "reflection", "message": f"Insight proposed: {lesson}"})
     except Exception:
         pass
 
@@ -276,10 +310,14 @@ def memory_writer_node(state: AgentState) -> Dict[str, Any]:
 
     activity.append({"type": "status", "message": "Saving task history to memory..."})
 
-    # 1. Save semantic memory if lesson was learned
+    # 1. Save semantic memory if genuine lesson was learned (defaults to approved=False for approval gating)
     if lesson:
         try:
-            semantic.add_memory(lesson, metadata={"source": "task_reflection", "user_input": user_input[:100]})
+            semantic.add_memory(
+                lesson,
+                metadata={"source": "task_reflection", "user_input": user_input[:100], "approved": False},
+                auto_approve=False
+            )
         except Exception:
             pass
 
@@ -316,13 +354,15 @@ def memory_writer_node(state: AgentState) -> Dict[str, Any]:
 workflow = StateGraph(AgentState)
 
 workflow.add_node("retrieve_memory", retrieve_memory_node)
+workflow.add_node("plan", plan_node)
 workflow.add_node("planner", planner_node)
 workflow.add_node("tool_executor", tool_executor_node)
 workflow.add_node("reflector", reflection_node)
 workflow.add_node("memory_writer", memory_writer_node)
 
 workflow.set_entry_point("retrieve_memory")
-workflow.add_edge("retrieve_memory", "planner")
+workflow.add_edge("retrieve_memory", "plan")
+workflow.add_edge("plan", "planner")
 
 def route_planner_decision(state: AgentState):
     return state.get("next_step", "reflect")

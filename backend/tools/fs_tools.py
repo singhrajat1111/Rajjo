@@ -244,3 +244,49 @@ def search_files(query: str, path: str = ".", max_results: int = 50) -> str:
         return _format_result("search_files", True, data={"matches": matches, "total_matches": len(matches)})
     except Exception as e:
         return _format_result("search_files", False, error_code="SEARCH_ERROR", error_msg=str(e))
+
+@tool
+def delete_file(path: str) -> str:
+    """
+    Deletes a file inside the workspace boundary.
+    Args:
+        path: Path to the file to delete (must be within workspace).
+    """
+    try:
+        p = safe_resolve_path(path)
+    except SecurityPathViolation as spv:
+        return _format_result("delete_file", False, error_code="ACCESS_DENIED_PATH_RESTRICTION", error_msg=str(spv))
+
+    try:
+        if not p.exists():
+            return _format_result("delete_file", False, error_code="FILE_NOT_FOUND", error_msg=f"File not found: {path}")
+        if p.is_dir():
+            return _format_result("delete_file", False, error_code="IS_A_DIRECTORY", error_msg=f"Target is a directory, not a file: {path}")
+        p.unlink()
+        return _format_result("delete_file", True, data={"path": str(p), "status": "deleted"})
+    except Exception as e:
+        return _format_result("delete_file", False, error_code="DELETE_ERROR", error_msg=str(e))
+
+@tool
+def copy_file(source: str, destination: str) -> str:
+    """
+    Copies a file within the workspace boundary.
+    Args:
+        source: Source file path.
+        destination: Destination file path.
+    """
+    try:
+        src = safe_resolve_path(source)
+        dst = safe_resolve_path(destination)
+    except SecurityPathViolation as spv:
+        return _format_result("copy_file", False, error_code="ACCESS_DENIED_PATH_RESTRICTION", error_msg=str(spv))
+
+    try:
+        if not src.exists():
+            return _format_result("copy_file", False, error_code="FILE_NOT_FOUND", error_msg=f"Source file not found: {source}")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        return _format_result("copy_file", True, data={"source": str(src), "destination": str(dst), "status": "copied"})
+    except Exception as e:
+        return _format_result("copy_file", False, error_code="COPY_ERROR", error_msg=str(e))
+

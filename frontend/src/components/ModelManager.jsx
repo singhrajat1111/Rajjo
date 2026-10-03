@@ -156,17 +156,17 @@ export default function ModelManager() {
     setIsScanningCloud(true);
     setCloudScanStatus('Fetching available models from Ollama Cloud...');
     try {
-      // Ollama Cloud API - models library
-      const response = await fetch('https://ollama.com/library?format=json');
+      // Fetch structured model catalog via backend to avoid CORS and format errors
+      const response = await authFetch('/models/ollama/cloud');
       if (!response.ok) throw new Error('Failed to fetch Ollama library');
       const data = await response.json();
       
       // Extract model names from the library
       const models = data.models?.map(m => m.name) || [];
-      setOllamaCloudModels(models.slice(0, 100)); // Limit to first 100
-      setCloudScanStatus(`Found ${models.length} models in Ollama Library`);
+      setOllamaCloudModels(models);
+      setCloudScanStatus(`Found ${models.length} featured models in Ollama Library`);
     } catch (error) {
-      setCloudScanStatus(`Error: ${error.message}. Try again later.`);
+      setCloudScanStatus(`Notice: ${error.message}.`);
     } finally {
       setIsScanningCloud(false);
     }

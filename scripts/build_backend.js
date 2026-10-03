@@ -43,6 +43,9 @@ const hiddenImports = [
   'uvicorn.lifespans.auto',
   'keyring.backends',
   'keyring.backends.Windows',
+  'keyring.backends.macOS',
+  'keyring.backends.SecretService',
+  'keyring.backends.chainer',
   'pydantic',
   'pydantic_core',
   'fastapi',
@@ -75,6 +78,12 @@ const args = [
   '--paths', rootDir,
   '--paths', path.join(rootDir, 'backend')
 ];
+
+// Add collect-all for large native packages with binary assets and dynamically loaded modules
+const collectAllPackages = ['chromadb', 'onnxruntime', 'llama_cpp', 'playwright'];
+for (const cap of collectAllPackages) {
+  args.push('--collect-all', cap);
+}
 
 for (const hi of hiddenImports) {
   args.push('--hidden-import', hi);

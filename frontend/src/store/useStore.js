@@ -108,17 +108,96 @@ export const useStore = create((set, get) => ({
     return false;
   },
 
-  // Chat State
+  // Chat & Threads State
+  threads: [],
+  activeThreadId: null,
   messages: [],
   input: '',
   isProcessing: false,
   activeActivities: [],
+  pendingApproval: null,
+
   setInput: (input) => set({ input }),
   setProcessing: (isProcessing) => set({ isProcessing }),
+  setPendingApproval: (pendingApproval) => set({ pendingApproval }),
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
   clearMessages: () => set({ messages: [] }),
   setActivities: (activities) => set({ activeActivities: activities }),
   appendActivity: (act) => set((state) => ({ activeActivities: [...state.activeActivities, act] })),
+
+  fetchThreads: async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/threads`);
+      if (res.ok) {
+        const data = await res.json();
+        set({ threads: data.threads || [] });
+        return data.threads;
+      }
+    } catch (e) {
+      console.error('Error fetching threads:', e);
+    }
+    return [];
+  },
+
+  selectThread: async (threadId) => {
+    set({ activeThreadId: threadId, isProcessing: false });
+    try {
+      const res = await authFetch(`${API_BASE}/threads/${threadId}/messages`);
+      if (res.ok) {
+        const data = await res.json();
+        set({ messages: data.messages || [] });
+      }
+    } catch (e) {
+      console.error('Error loading thread messages:', e);
+    }
+  },
+
+  createThread: async (title = 'New Conversation') => {
+    try {
+      const res = await authFetch(`${API_BASE}/threads`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        set({ activeThreadId: data.thread_id, messages: [] });
+        await get().fetchThreads();
+        return data.thread_id;
+      }
+    } catch (e) {
+      console.error('Error creating thread:', e);
+    }
+    return null;
+  },
+
+  deleteThread: async (threadId) => {
+    try {
+      await authFetch(`${API_BASE}/threads/${threadId}`, { method: 'DELETE' });
+      set((state) => ({
+        threads: state.threads.filter((t) => t.id !== threadId),
+        ...(state.activeThreadId === threadId ? { activeThreadId: null, messages: [] } : {})
+      }));
+    } catch (e) {
+      console.error('Error deleting thread:', e);
+    }
+  },
+
+  resolveApproval: async (approvalId, approved) => {
+    try {
+      const res = await authFetch(`${API_BASE}/chat/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approval_id: approvalId, approved })
+      });
+      set({ pendingApproval: null });
+      return res.ok;
+    } catch (e) {
+      console.error('Error resolving approval:', e);
+      set({ pendingApproval: null });
+      return false;
+    }
+  },
 
   // Models State
   modelsData: {
@@ -361,6 +440,30 @@ export const useStore = create((set, get) => ({
     } catch (e) {
       console.error(e);
     }
+  },
+  approveSemanticMemory: async (memId) => {
+    try {
+      const res = await authFetch(`${API_BASE}/memory/semantic/${memId}/approve`, { method: 'POST' });
+      if (res.ok) {
+        await get().fetchMemory();
+        return true;
+      }
+    } catch (e) {
+      console.error('Error approving memory:', e);
+    }
+    return false;
+  },
+  deleteSemanticMemory: async (memId) => {
+    try {
+      const res = await authFetch(`${API_BASE}/memory/semantic/${memId}`, { method: 'DELETE' });
+      if (res.ok) {
+        await get().fetchMemory();
+        return true;
+      }
+    } catch (e) {
+      console.error('Error deleting memory:', e);
+    }
+    return false;
   },
   exportMemory: async () => {
     try {

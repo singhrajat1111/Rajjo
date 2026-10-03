@@ -88,6 +88,15 @@ if (installRes.status !== 0) {
   console.log('✅ Python dependencies installed successfully.');
 }
 
+// 6. Install Playwright Chromium browser binary
+console.log('\n▶ [Step] Installing Playwright Chromium browser binary...');
+try {
+  runCommand('Installing Playwright Chromium', `${quotedPython} -m playwright install chromium`, backendDir);
+  console.log('✅ Playwright Chromium browser installed successfully.');
+} catch (e) {
+  console.warn('⚠️ Playwright install chromium notice:', e.message);
+}
+
 console.log('\n======================================================');
 console.log('🎉 Setup Complete! You can now start Rajjo:');
 console.log('');

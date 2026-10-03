@@ -3,72 +3,27 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Settings,
   Key,
-  Lock,
-  Unlock,
-  Eye,
-  EyeOff,
-  Save,
-  RefreshCw,
   FolderOpen,
   HardDrive,
   Database,
   Shield,
-  Bell,
-  BellOff,
-  Moon,
-  Sun,
-  Monitor,
-  Smartphone,
-  Tablet,
-  Laptop,
   Palette,
   Contrast,
   Wand2,
-  LayoutDashboard,
   Terminal,
-  Server,
-  Code,
-  Layers,
+  Cpu,
   Network,
-  Globe,
   Zap,
   Brain,
-  Activity,
-  BarChart3,
-  GitBranch,
-  Link2,
-  Plus,
-  Minus,
-  Trash2,
-  Edit2,
-  Copy,
-  Download,
-  Upload,
-  Filter,
-  Star,
-  Heart,
-  Flag,
-  Share2,
-  MoreVertical,
-  Menu,
-  X,
-  HelpCircle,
-  User,
-  LogOut,
-  Info,
   AlertCircle,
   CheckCircle2,
-  Wrench,
-  Cpu,
-  MessageSquare,
   Sparkles,
   FileText,
   Camera,
-  Wrench as WrenchIcon,
-  Database as DatabaseIcon,
+  RefreshCw,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
-import { cn, formatBytes } from '../lib/utils';
+import { cn } from '../lib/utils';
 import GeneralTab from './settings/GeneralTab';
 import CredentialField from './settings/CredentialField';
 import StorageItem from './settings/StorageItem';
@@ -84,28 +39,50 @@ export default function SettingsPanel() {
   const [groqKey, setGroqKey] = useState('');
   const [anthropicKey, setAnthropicKey] = useState('');
   const [customKey, setCustomKey] = useState('');
+  const [geminiKey, setGeminiKey] = useState('');
+  const [openrouterKey, setOpenrouterKey] = useState('');
+
+  const [workspaceDir, setWorkspaceDir] = useState('');
+  const [dataDir, setDataDir] = useState('');
   const [shellTimeout, setShellTimeout] = useState(30);
   const [maxIterations, setMaxIterations] = useState(10);
+  const [shellConfirmDestructive, setShellConfirmDestructive] = useState(true);
+  const [autoSaveConversations, setAutoSaveConversations] = useState(true);
+
+  const [httpProxy, setHttpProxy] = useState('');
+  const [httpsProxy, setHttpsProxy] = useState('');
+  const [noProxy, setNoProxy] = useState('localhost,127.0.0.1,.local');
+
   const [theme, setThemeState] = useState('dark');
   const [showOpenaiKey, setShowOpenaiKey] = useState(false);
   const [showGroqKey, setShowGroqKey] = useState(false);
   const [showAnthropicKey, setShowAnthropicKey] = useState(false);
   const [showCustomKey, setShowCustomKey] = useState(false);
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+  const [showOpenrouterKey, setShowOpenrouterKey] = useState(false);
+
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   useEffect(() => {
     fetchSettings();
-    if (settingsData?.settings?.theme) {
-      setThemeState(settingsData.settings.theme);
+  }, [fetchSettings]);
+
+  useEffect(() => {
+    if (settingsData?.settings) {
+      const s = settingsData.settings;
+      if (s.theme) setThemeState(s.theme);
+      if (s.shell_timeout !== undefined) setShellTimeout(s.shell_timeout);
+      if (s.max_iterations !== undefined) setMaxIterations(s.max_iterations);
+      if (s.workspace_dir) setWorkspaceDir(s.workspace_dir);
+      if (s.data_dir) setDataDir(s.data_dir);
+      if (s.shell_confirm_destructive !== undefined) setShellConfirmDestructive(s.shell_confirm_destructive);
+      if (s.auto_save_conversations !== undefined) setAutoSaveConversations(s.auto_save_conversations);
+      if (s.http_proxy !== undefined) setHttpProxy(s.http_proxy);
+      if (s.https_proxy !== undefined) setHttpsProxy(s.https_proxy);
+      if (s.no_proxy !== undefined) setNoProxy(s.no_proxy);
     }
-    if (settingsData?.settings?.shell_timeout) {
-      setShellTimeout(settingsData.settings.shell_timeout);
-    }
-    if (settingsData?.settings?.max_iterations) {
-      setMaxIterations(settingsData.settings.max_iterations);
-    }
-  }, [fetchSettings, settingsData]);
+  }, [settingsData]);
 
   const handleSave = useCallback(async () => {
     setIsSaving(true);
@@ -113,11 +90,20 @@ export default function SettingsPanel() {
     const updates = {
       shell_timeout: Number(shellTimeout),
       max_iterations: Number(maxIterations),
+      workspace_dir: workspaceDir.trim() || undefined,
+      data_dir: dataDir.trim() || undefined,
+      shell_confirm_destructive: Boolean(shellConfirmDestructive),
+      auto_save_conversations: Boolean(autoSaveConversations),
+      http_proxy: httpProxy.trim(),
+      https_proxy: httpsProxy.trim(),
+      no_proxy: noProxy.trim(),
       theme,
       openai_api_key: openaiKey || undefined,
       groq_api_key: groqKey || undefined,
       anthropic_api_key: anthropicKey || undefined,
       custom_api_key: customKey || undefined,
+      gemini_api_key: geminiKey || undefined,
+      openrouter_api_key: openrouterKey || undefined,
     };
     const ok = await updateSettings(updates);
     if (ok) {
@@ -126,18 +112,26 @@ export default function SettingsPanel() {
       setGroqKey('');
       setAnthropicKey('');
       setCustomKey('');
+      setGeminiKey('');
+      setOpenrouterKey('');
       setTimeout(() => setSaveSuccess(false), 3000);
     }
     setIsSaving(false);
-  }, [shellTimeout, maxIterations, theme, openaiKey, groqKey, anthropicKey, customKey, updateSettings]);
+  }, [
+    shellTimeout, maxIterations, workspaceDir, dataDir,
+    shellConfirmDestructive, autoSaveConversations,
+    httpProxy, httpsProxy, noProxy, theme,
+    openaiKey, groqKey, anthropicKey, customKey, geminiKey, openrouterKey,
+    updateSettings
+  ]);
 
   const tabs = [
     { id: 'general', icon: Settings, label: 'General' },
     { id: 'credentials', icon: Key, label: 'Credentials' },
-    { id: 'execution', icon: Terminal, label: 'Execution' },
+    { id: 'execution', icon: Terminal, label: 'Execution & Jail' },
     { id: 'appearance', icon: Palette, label: 'Appearance' },
     { id: 'data', icon: Database, label: 'Data & Storage' },
-    { id: 'advanced', icon: Wrench, label: 'Advanced' },
+    { id: 'advanced', icon: Network, label: 'Network & Proxy' },
   ];
 
   const [activeTab, setActiveTab] = useState('general');
@@ -155,7 +149,7 @@ export default function SettingsPanel() {
             Application Settings
           </h2>
           <p className="text-[var(--fg-muted)] text-sm mt-1">
-            Configure secure credentials, data storage paths, execution safety limits, and appearance
+            Configure secure credentials, workspace isolation, human approval gates, and network proxy
           </p>
         </div>
         <button
@@ -212,13 +206,13 @@ export default function SettingsPanel() {
           {activeTab === 'credentials' && (
             <div className="space-y-6">
               <div className="p-4 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
-                <div className="flex items-center gap-3 mb-3">
+                <div className="flex items-center gap-3 mb-1">
                   <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
                     <Key size={20} className="text-[var(--accent-400)]" />
                   </div>
                   <div>
-                    <h3 className="font-semibold text-[var(--fg-primary)]">Secure API Credentials</h3>
-                    <p className="text-sm text-[var(--fg-secondary)]">Keys are encrypted at rest, masked in UI, and never transmitted in plaintext.</p>
+                    <h3 className="font-semibold text-[var(--fg-primary)]">Encrypted Credentials Store</h3>
+                    <p className="text-sm text-[var(--fg-secondary)]">Keys are stored in OS Keyring, masked in UI, and never exposed to models.</p>
                   </div>
                 </div>
               </div>
@@ -232,7 +226,7 @@ export default function SettingsPanel() {
                 onToggleShow={setShowOpenaiKey}
                 configured={settingsData?.credentials?.openai?.configured}
                 icon={<Brain size={18} className="text-green-400" />}
-                helpText="Get your key at platform.openai.com/api-keys"
+                helpText="OpenAI models: gpt-4o, o3-mini, o1"
               />
               <CredentialField
                 label="Anthropic API Key"
@@ -243,7 +237,7 @@ export default function SettingsPanel() {
                 onToggleShow={setShowAnthropicKey}
                 configured={settingsData?.credentials?.anthropic?.configured}
                 icon={<Sparkles size={18} className="text-orange-400" />}
-                helpText="Get your key at console.anthropic.com"
+                helpText="Anthropic models: claude-3-7-sonnet, claude-3-5-sonnet"
               />
               <CredentialField
                 label="Groq API Key"
@@ -254,105 +248,139 @@ export default function SettingsPanel() {
                 onToggleShow={setShowGroqKey}
                 configured={settingsData?.credentials?.groq?.configured}
                 icon={<Zap size={18} className="text-emerald-400" />}
-                helpText="Get your key at console.groq.com/keys"
+                helpText="Groq fast inference: llama-3.3-70b-versatile"
+              />
+              <CredentialField
+                label="Google Gemini API Key"
+                placeholder="AIzaSy..."
+                value={geminiKey}
+                onChange={setGeminiKey}
+                show={showGeminiKey}
+                onToggleShow={setShowGeminiKey}
+                configured={settingsData?.credentials?.gemini?.configured}
+                icon={<Sparkles size={18} className="text-blue-400" />}
+                helpText="Google Gemini: gemini-2.0-flash, gemini-1.5-pro"
+              />
+              <CredentialField
+                label="OpenRouter API Key"
+                placeholder="sk-or-..."
+                value={openrouterKey}
+                onChange={setOpenrouterKey}
+                show={showOpenrouterKey}
+                onToggleShow={setShowOpenrouterKey}
+                configured={settingsData?.credentials?.openrouter?.configured}
+                icon={<Network size={18} className="text-purple-400" />}
+                helpText="Access 100+ models via openrouter.ai"
               />
               <CredentialField
                 label="Universal / Custom API Key"
-                placeholder="sk-... or your universal key"
+                placeholder="API Key for custom OpenAI-compatible endpoint"
                 value={customKey}
                 onChange={setCustomKey}
                 show={showCustomKey}
                 onToggleShow={setShowCustomKey}
                 configured={settingsData?.credentials?.custom?.configured}
-                icon={<Globe size={18} className="text-purple-400" />}
-                helpText="Works with DeepSeek, OpenRouter, Together AI, LM Studio, vLLM, and any OpenAI-compatible endpoint"
+                icon={<Terminal size={18} className="text-cyan-400" />}
+                helpText="DeepSeek, Together, vLLM, LM Studio, or local servers"
               />
             </div>
           )}
 
-          {/* Execution Tab */}
+          {/* Execution & Jail Tab */}
           {activeTab === 'execution' && (
             <div className="space-y-6">
               <div>
                 <h3 className="font-semibold text-[var(--fg-primary)] mb-4 flex items-center gap-2">
-                  <Shield size={20} className="text-[var(--danger)]" />
-                  Execution Safety & Limits
+                  <Shield size={20} className="text-[var(--brand-400)]" />
+                  Workspace Jail & Safety Boundaries
                 </h3>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs text-[var(--fg-muted)] mb-1 flex items-center justify-between">
-                      Shell Execution Timeout (Seconds)
-                      <span className="text-xs text-[var(--fg-muted)] font-mono">{shellTimeout}s</span>
+                    <label className="block text-xs text-[var(--fg-muted)] mb-1">
+                      Active Workspace Root (Strict Security Boundary)
                     </label>
-                    <input
-                      type="range"
-                      min="5"
-                      max="300"
-                      step="5"
-                      value={shellTimeout}
-                      onChange={e => setShellTimeout(Number(e.target.value))}
-                      className="w-full h-2 bg-[var(--bg-input)] rounded-lg appearance-none accent-[var(--brand-500)]"
-                    />
-                    <div className="flex justify-between text-xs text-[var(--fg-muted)] mt-1">
-                      <span>5s (Fast)</span>
-                      <span>300s (Long-running)</span>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={workspaceDir}
+                        onChange={e => setWorkspaceDir(e.target.value)}
+                        placeholder="Path to workspace directory"
+                        className="input font-mono flex-1 text-xs"
+                      />
                     </div>
+                    <p className="text-xs text-[var(--fg-muted)] mt-1">
+                      All file operations and shell commands run strictly jailed inside this folder. The agent cannot modify its own source code.
+                    </p>
                   </div>
 
-                  <div>
-                    <label className="block text-xs text-[var(--fg-muted)] mb-1 flex items-center justify-between">
-                      Max Agent Iterations
-                      <span className="text-xs text-[var(--fg-muted)] font-mono">{maxIterations}</span>
-                    </label>
-                    <input
-                      type="range"
-                      min="1"
-                      max="50"
-                      step="1"
-                      value={maxIterations}
-                      onChange={e => setMaxIterations(Number(e.target.value))}
-                      className="w-full h-2 bg-[var(--bg-input)] rounded-lg appearance-none accent-[var(--brand-500)]"
-                    />
-                    <div className="flex justify-between text-xs text-[var(--fg-muted)] mt-1">
-                      <span>1 (Single step)</span>
-                      <span>50 (Complex tasks)</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <div className="font-medium text-[var(--fg-primary)]">Confirm Destructive Commands</div>
-                      <div className="text-xs text-[var(--fg-muted)]">Require confirmation before running rm -rf, format, etc.</div>
+                      <label className="block text-xs text-[var(--fg-muted)] mb-1 flex items-center justify-between">
+                        <span>Command Execution Timeout (Seconds)</span>
+                        <span className="font-mono">{shellTimeout}s</span>
+                      </label>
+                      <input
+                        type="number"
+                        min="5"
+                        max="300"
+                        value={shellTimeout}
+                        onChange={e => setShellTimeout(Number(e.target.value))}
+                        className="input text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-[var(--fg-muted)] mb-1 flex items-center justify-between">
+                        <span>Max Agent Iterations</span>
+                        <span className="font-mono">{maxIterations}</span>
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="50"
+                        value={maxIterations}
+                        onChange={e => setMaxIterations(Number(e.target.value))}
+                        className="input text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Confirm Destructive Commands Real Toggle */}
+                  <div className="flex items-center justify-between p-4 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
+                    <div>
+                      <div className="font-medium text-[var(--fg-primary)]">Human Approval Gate (LangGraph Interrupt)</div>
+                      <div className="text-xs text-[var(--fg-muted)]">
+                        Prompt user with an on-screen Approve/Deny modal before executing shell commands, file deletions, or destructive operations.
+                      </div>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" defaultChecked className="sr-only peer" />
-                      <div className="w-11 h-6 bg-[var(--bg-hover)] peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[var(--brand-500)/20] rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand-500)]"></div>
+                      <input
+                        type="checkbox"
+                        checked={shellConfirmDestructive}
+                        onChange={e => setShellConfirmDestructive(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-[var(--bg-hover)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand-500)]"></div>
                     </label>
                   </div>
 
-                  <div className="flex items-center justify-between p-3 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
+                  {/* Auto-save conversations Real Toggle */}
+                  <div className="flex items-center justify-between p-4 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
                     <div>
-                      <div className="font-medium text-[var(--fg-primary)]">Allow Network Access</div>
-                      <div className="text-xs text-[var(--fg-muted)]">Enable web search, browser automation, API calls</div>
+                      <div className="font-medium text-[var(--fg-primary)]">Auto-Save Conversations to SQLite Threads</div>
+                      <div className="text-xs text-[var(--fg-muted)]">
+                        Persist conversation history and execution steps across app restarts.
+                      </div>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" defaultChecked className="sr-only peer" />
-                      <div className="w-11 h-6 bg-[var(--bg-hover)] peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[var(--brand-500)/20] rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand-500)]"></div>
+                      <input
+                        type="checkbox"
+                        checked={autoSaveConversations}
+                        onChange={e => setAutoSaveConversations(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-[var(--bg-hover)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand-500)]"></div>
                     </label>
                   </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-[var(--fg-primary)] mb-4 flex items-center gap-2">
-                  <Terminal size={20} className="text-[var(--accent-400)]" />
-                  Default Working Directory
-                </h3>
-                <div className="p-3 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
-                  <div className="font-mono text-sm text-[var(--fg-secondary)] truncate">
-                    {settingsData?.settings?.data_dir || '~/.rajjo'}
-                  </div>
-                  <div className="text-xs text-[var(--fg-muted)] mt-1">Change via RAJJO_DATA_DIR environment variable</div>
                 </div>
               </div>
             </div>
@@ -378,98 +406,12 @@ export default function SettingsPanel() {
                           : 'border-[var(--border-default)] hover:border-[var(--border-emphasized)]'
                       )}
                     >
-                      <div className="flex items-center gap-3">
-                        <div className={cn(
-                          'w-10 h-10 rounded-xl flex items-center justify-center',
-                          t === 'dark' && 'bg-[var(--bg-deep)]',
-                          t === 'light' && 'bg-white',
-                          t === 'system' && 'bg-gradient-to-br from-[var(--bg-deep)] to-white'
-                        )}>
-                          {t === 'dark' && <Moon size={20} className="text-[var(--fg-secondary)]" />}
-                          {t === 'light' && <Sun size={20} className="text-[var(--fg-secondary)]" />}
-                          {t === 'system' && <Monitor size={20} className="text-[var(--fg-secondary)]" />}
-                        </div>
-                        <div>
-                          <div className="font-medium text-[var(--fg-primary)] capitalize">{t}</div>
-                          <div className="text-xs text-[var(--fg-muted)]">
-                            {t === 'dark' ? 'Dark mode always' : t === 'light' ? 'Light mode always' : 'Follow system'}
-                          </div>
-                        </div>
+                      <div className="font-medium text-[var(--fg-primary)] capitalize">{t}</div>
+                      <div className="text-xs text-[var(--fg-muted)] mt-1">
+                        {t === 'dark' ? 'Sleek dark mode' : t === 'light' ? 'Light mode' : 'Follow system setting'}
                       </div>
                     </button>
                   ))}
-                </div>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-[var(--fg-primary)] mb-4 flex items-center gap-2">
-                  <Contrast size={20} className="text-[var(--accent-400)]" />
-                  Accent Color
-                </h3>
-                <div className="flex flex-wrap gap-3">
-                  {[
-                    { name: 'Teal (Default)', css: 'var(--brand-500)', bg: 'var(--brand-500)' },
-                    { name: 'Blue', css: '#3b82f6', bg: '#3b82f6' },
-                    { name: 'Purple', css: '#a855f7', bg: '#a855f7' },
-                    { name: 'Green', css: '#22c55e', bg: '#22c55e' },
-                    { name: 'Orange', css: '#f97316', bg: '#f97316' },
-                    { name: 'Red', css: '#ef4444', bg: '#ef4444' },
-                    { name: 'Pink', css: '#ec4899', bg: '#ec4899' },
-                    { name: 'Cyan', css: '#06b6d4', bg: '#06b6d4' },
-                  ].map(color => (
-                    <button
-                      key={color.name}
-                      className={cn(
-                        'w-12 h-12 rounded-xl border-2 transition-all flex flex-col items-center justify-center gap-1',
-                        theme === color.css ? 'border-[var(--fg-primary)] scale-110' : 'border-transparent hover:border-[var(--border-emphasized)]'
-                      )}
-                      style={{ backgroundColor: color.bg }}
-                      onClick={() => document.documentElement.style.setProperty('--brand-500', color.css)}
-                      title={color.name}
-                    >
-                      <span className="text-[10px] font-mono text-white/80">{color.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-[var(--fg-primary)] mb-4 flex items-center gap-2">
-                  <Wand2 size={20} className="text-[var(--accent-400)]" />
-                  UI Density
-                </h3>
-                <div className="flex gap-3">
-                  {['comfortable', 'compact', 'spacious'].map(d => (
-                    <button
-                      key={d}
-                      className={cn(
-                        'flex-1 p-4 rounded-xl border-2 transition-all text-center',
-                        theme === d ? 'border-[var(--brand-500)] bg-cyan-500/5' : 'border-[var(--border-default)] hover:border-[var(--border-emphasized)]'
-                      )}
-                    >
-                      <div className="font-medium text-[var(--fg-primary)] capitalize">{d}</div>
-                      <div className="text-xs text-[var(--fg-muted)]">
-                        {d === 'comfortable' ? 'Default spacing' : d === 'compact' ? 'More content' : 'More breathing room'}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-[var(--fg-primary)] mb-4 flex items-center gap-2">
-                  <Monitor size={20} className="text-[var(--brand-400)]" />
-                  Animations
-                </h3>
-                <div className="flex items-center justify-between p-3 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
-                  <div>
-                    <div className="font-medium text-[var(--fg-primary)]">Reduce Motion</div>
-                    <div className="text-xs text-[var(--fg-muted)]">Disable non-essential animations for accessibility</div>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" />
-                    <div className="w-11 h-6 bg-[var(--bg-hover)] peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[var(--brand-500)/20] rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand-500)]"></div>
-                  </label>
                 </div>
               </div>
             </div>
@@ -481,141 +423,77 @@ export default function SettingsPanel() {
               <div>
                 <h3 className="font-semibold text-[var(--fg-primary)] mb-4 flex items-center gap-2">
                   <HardDrive size={20} className="text-[var(--accent-400)]" />
-                  Data Directory
+                  Data Directory & Storage Paths
                 </h3>
                 <div className="space-y-4">
-                  <div className="p-4 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-xs text-[var(--fg-muted)]">Location</div>
-                        <div className="font-mono text-sm text-[var(--fg-secondary)] truncate max-w-md">
-                          {settingsData?.settings?.data_dir || '~/.rajjo'}
-                        </div>
-                      </div>
-                      <button className="btn btn-outline btn-sm">Open Folder</button>
-                    </div>
+                  <div>
+                    <label className="block text-xs text-[var(--fg-muted)] mb-1">
+                      Rajjo Base Data Directory
+                    </label>
+                    <input
+                      type="text"
+                      value={dataDir}
+                      onChange={e => setDataDir(e.target.value)}
+                      placeholder="e.g. D:\RajjoData or ~/.rajjo"
+                      className="input font-mono text-xs w-full"
+                    />
+                    <p className="text-xs text-[var(--fg-muted)] mt-1">
+                      Contains SQLite databases, semantic memory vector store, logs, and screenshots.
+                    </p>
                   </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <StorageItem label="Episodic Memory" value={`${(settingsData?.storage?.episodic_size || 0).toFixed(2)} MB`} icon={FileText} />
-                    <StorageItem label="Semantic Vectors" value={`${(settingsData?.storage?.semantic_size || 0).toFixed(2)} MB`} icon={Brain} />
-                    <StorageItem label="Model Cache" value={`${(settingsData?.storage?.model_cache || 0).toFixed(2)} MB`} icon={Cpu} />
-                    <StorageItem label="Screenshots" value={`${(settingsData?.storage?.screenshots || 0).toFixed(2)} MB`} icon={Camera} />
+                    <StorageItem label="Episodic Memory" value="SQLite (rajjo.db)" icon={FileText} />
+                    <StorageItem label="Semantic Store" value="Local Vectors (Deterministic)" icon={Brain} />
+                    <StorageItem label="Model Cache" value="In-Memory RAM" icon={Cpu} />
+                    <StorageItem label="Screenshots" value="Local Folder" icon={Camera} />
                   </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-[var(--fg-primary)] mb-4 flex items-center gap-2">
-                  <Database size={20} className="text-purple-400" />
-                  Memory Management
-                </h3>
-                <div className="space-y-3">
-                  <button className="btn btn-outline w-full justify-start gap-3 p-4">
-                    <RefreshCw size={20} className="text-[var(--brand-400)]" />
-                    <div className="text-left">
-                      <div className="font-medium text-[var(--fg-primary)]">Rebuild Semantic Index</div>
-                      <div className="text-xs text-[var(--fg-muted)]">Re-index all semantic memories for better search</div>
-                    </div>
-                  </button>
-                  <button className="btn btn-outline w-full justify-start gap-3 p-4 text-[var(--danger)] hover:bg-[var(--danger-bg)] border-[var(--danger-border)]">
-                    <Trash2 size={20} />
-                    <div className="text-left">
-                      <div className="font-medium text-[var(--fg-primary)]">Clear All Memory</div>
-                      <div className="text-xs text-[var(--fg-muted)]">Permanently delete all episodic and semantic data</div>
-                    </div>
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-[var(--fg-primary)] mb-4 flex items-center gap-2">
-                  <Download size={20} className="text-[var(--accent-400)]" />
-                  Backup & Export
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <button className="btn btn-outline p-4 text-left">
-                    <Download size={20} className="text-[var(--brand-400)]" />
-                    <div className="mt-2">
-                      <div className="font-medium text-[var(--fg-primary)]">Export All Data</div>
-                      <div className="text-xs text-[var(--fg-muted)]">Download complete backup as JSON</div>
-                    </div>
-                  </button>
-                  <button className="btn btn-outline p-4 text-left">
-                    <Upload size={20} className="text-[var(--accent-400)]" />
-                    <div className="mt-2">
-                      <div className="font-medium text-[var(--fg-primary)]">Import Data</div>
-                      <div className="text-xs text-[var(--fg-muted)]">Restore from a previous backup</div>
-                    </div>
-                  </button>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Advanced Tab */}
+          {/* Network & Proxy Tab */}
           {activeTab === 'advanced' && (
             <div className="space-y-6">
               <div>
                 <h3 className="font-semibold text-[var(--fg-primary)] mb-4 flex items-center gap-2">
-                  <Cpu size={20} className="text-[var(--brand-400)]" />
-                  Model Router Configuration
-                </h3>
-                <div className="space-y-3">
-                  <div className="p-3 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
-                    <div className="font-mono text-sm text-[var(--fg-secondary)]">Ollama Base URL</div>
-                    <div className="text-xs text-[var(--fg-muted)] font-mono">{settingsData?.settings?.ollama_base_url || 'http://localhost:11434'}</div>
-                  </div>
-                  <div className="p-3 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
-                    <div className="font-mono text-sm text-[var(--fg-secondary)]">Default Provider</div>
-                    <div className="text-xs text-[var(--fg-muted)] font-mono">{settingsData?.settings?.active_provider || 'universal'}</div>
-                  </div>
-                  <div className="p-3 bg-[var(--bg-input)] rounded-xl border border-[var(--border-default)]">
-                    <div className="font-mono text-sm text-[var(--fg-secondary)]">Default Model</div>
-                    <div className="text-xs text-[var(--fg-muted)] font-mono">{settingsData?.settings?.active_model_id || 'deepseek-chat'}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-[var(--fg-primary)] mb-4 flex items-center gap-2">
                   <Network size={20} className="text-[var(--accent-400)]" />
-                  Network & Proxy
+                  Network Proxy Configuration
                 </h3>
-                <div className="space-y-3">
+                <p className="text-sm text-[var(--fg-secondary)] mb-4">
+                  Proxies are automatically propagated to all backend HTTP clients (urllib, httpx, requests, and model router).
+                </p>
+                <div className="space-y-4">
                   <div>
                     <label className="block text-xs text-[var(--fg-muted)] mb-1">HTTP Proxy</label>
-                    <input type="text" className="input input-lg font-mono" placeholder="http://proxy:8080" />
+                    <input
+                      type="text"
+                      value={httpProxy}
+                      onChange={e => setHttpProxy(e.target.value)}
+                      className="input font-mono text-xs"
+                      placeholder="http://127.0.0.1:8080 or http://proxy.corp.net:3128"
+                    />
                   </div>
                   <div>
                     <label className="block text-xs text-[var(--fg-muted)] mb-1">HTTPS Proxy</label>
-                    <input type="text" className="input input-lg font-mono" placeholder="http://proxy:8080" />
+                    <input
+                      type="text"
+                      value={httpsProxy}
+                      onChange={e => setHttpsProxy(e.target.value)}
+                      className="input font-mono text-xs"
+                      placeholder="http://127.0.0.1:8080 or https://proxy.corp.net:3128"
+                    />
                   </div>
                   <div>
-                    <label className="block text-xs text-[var(--fg-muted)] mb-1">No Proxy</label>
-                    <input type="text" className="input input-lg font-mono" placeholder="localhost,127.0.0.1,.local" />
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-[var(--fg-primary)] mb-4 flex items-center gap-2">
-                  <AlertCircle size={20} className="text-[var(--danger)]" />
-                  Danger Zone
-                </h3>
-                <div className="p-4 bg-[var(--danger-bg)] border border-[var(--danger-border)] rounded-xl">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-[var(--danger)]/20 flex items-center justify-center">
-                      <AlertCircle size={20} className="text-[var(--danger)]" />
-                    </div>
-                    <div>
-                      <h4 className="font-semibold text-[var(--danger)]">Irreversible Actions</h4>
-                      <p className="text-sm text-[var(--fg-secondary)]">These actions cannot be undone. Proceed with caution.</p>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-3">
-                    <button className="btn btn-danger btn-sm">Reset All Settings</button>
-                    <button className="btn btn-outline btn-sm text-[var(--danger)] border-[var(--danger-border)] hover:bg-[var(--danger-bg)]">Clear All Data</button>
-                    <button className="btn btn-outline btn-sm text-[var(--danger)] border-[var(--danger-border)] hover:bg-[var(--danger-bg)]">Uninstall Rajjo</button>
+                    <label className="block text-xs text-[var(--fg-muted)] mb-1">No Proxy (Bypass Hosts)</label>
+                    <input
+                      type="text"
+                      value={noProxy}
+                      onChange={e => setNoProxy(e.target.value)}
+                      className="input font-mono text-xs"
+                      placeholder="localhost,127.0.0.1,.local"
+                    />
                   </div>
                 </div>
               </div>

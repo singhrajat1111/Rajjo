@@ -225,8 +225,7 @@ export default function App() {
     { id: 'models', icon: Cpu, label: 'Models', short: 'LLM' },
     { id: 'tools', icon: Wrench, label: 'Tools', short: 'Auto' },
     { id: 'memory', icon: Database, label: 'Memory', short: 'Brain' },
-    { id: 'mcp', icon: Link2, label: 'MCP', short: 'Ext' },
-    { id: 'agents', icon: GitBranch, label: 'Agents', short: 'Team' },
+    // Multi-agent and MCP tabs hidden until full feature stabilization
     { id: 'settings', icon: Settings, label: 'Settings', short: 'Cfg' },
   ];
 

@@ -70,8 +70,6 @@ const COMMANDS = [
   { id: 'nav-models', title: 'Go to Models', description: 'Manage LLM models and providers', category: 'Navigation', icon: Cpu, action: 'models', keys: '⌘2' },
   { id: 'nav-tools', title: 'Go to Tools', description: 'Manage automation tools', category: 'Navigation', icon: Wrench, action: 'tools', keys: '⌘3' },
   { id: 'nav-memory', title: 'Go to Memory', description: 'View episodic and semantic memory', category: 'Navigation', icon: Database, action: 'memory', keys: '⌘4' },
-  { id: 'nav-mcp', title: 'Go to MCP', description: 'Manage MCP servers', category: 'Navigation', icon: Link2, action: 'mcp', keys: '⌘5' },
-  { id: 'nav-agents', title: 'Go to Agents', description: 'Multi-agent orchestration', category: 'Navigation', icon: GitBranch, action: 'agents', keys: '⌘6' },
   { id: 'nav-settings', title: 'Go to Settings', description: 'Open settings panel', category: 'Navigation', icon: Settings, action: 'settings', keys: '⌘,' },
 
   // Actions

@@ -34,6 +34,11 @@ import {
   Lock,
   Unlock,
   Check,
+  ShieldAlert,
+  AlertTriangle,
+  Plus,
+  MessageSquare,
+  X,
 } from 'lucide-react';
 import { useStore, authFetch } from '../store/useStore';
 import { cn, formatRelativeTime, generateId } from '../lib/utils';
@@ -54,11 +59,21 @@ export default function ChatArea({
     isProcessing,
     setProcessing,
     healthData,
+    threads,
+    activeThreadId,
+    fetchThreads,
+    selectThread,
+    createThread,
+    deleteThread,
+    pendingApproval,
+    setPendingApproval,
+    resolveApproval,
   } = useStore();
   
   const [streamActivities, setStreamActivities] = useState([]);
   const [liveAgentMessage, setLiveAgentMessage] = useState('');
   const [isActivityOpen, setIsActivityOpen] = useState(true);
+  const [showThreadMenu, setShowThreadMenu] = useState(false);
   const [expandedMessageSteps, setExpandedMessageSteps] = useState({});
   const [copiedMsgIdx, setCopiedMsgIdx] = useState(null);
   const [bookmarkedIndices, setBookmarkedIndices] = useState({});
@@ -67,6 +82,21 @@ export default function ChatArea({
   const activitiesRef = useRef([]);
   const abortControllerRef = useRef(null);
   const textareaRef = useRef(null);
+  const threadMenuRef = useRef(null);
+
+  useEffect(() => {
+    fetchThreads();
+  }, [fetchThreads]);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (threadMenuRef.current && !threadMenuRef.current.contains(e.target)) {
+        setShowThreadMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleCopyMessage = (text, idx) => {
     if (!text) return;
@@ -84,7 +114,6 @@ export default function ChatArea({
   };
 
   const handleRegenerate = (idx) => {
-    // Find the nearest preceding user message
     for (let i = idx - 1; i >= 0; i--) {
       if (messages[i]?.role === 'user') {
         handleSend(messages[i].content);
@@ -112,6 +141,7 @@ export default function ChatArea({
       console.error('Abort request failed:', e);
     }
     setProcessing(false);
+    setPendingApproval(null);
     addMessage({
       role: 'agent',
       content: '⏹️ *Task execution was stopped by user request.*',
@@ -121,7 +151,7 @@ export default function ChatArea({
     setStreamActivities([]);
     setLiveAgentMessage('');
     if (setLiveStreamMsg) setLiveStreamMsg('');
-  }, [addMessage, setProcessing, setLiveStreamMsg]);
+  }, [addMessage, setProcessing, setLiveStreamMsg, setPendingApproval]);
 
   useEffect(() => {
     if (onAbortTaskRef) {
@@ -158,7 +188,8 @@ export default function ChatArea({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: textToSend,
-          history: currentHistory
+          history: currentHistory,
+          thread_id: activeThreadId || undefined
         }),
         signal: controller.signal
       });
@@ -186,11 +217,28 @@ export default function ChatArea({
             try {
               const data = JSON.parse(trimmed.slice(6));
 
-              if (data.type === 'tool_start' && (data.tool === 'open_visible_browser' || (data.args && data.args.visible))) {
-                onTriggerVisibleWindow(true);
-              }
-
-              if (data.type === 'status' || data.type === 'plan_summary' || data.type === 'tool_start' || data.type === 'tool_end' || data.type === 'reflection') {
+              // Real-time token streaming
+              if (data.type === 'token') {
+                collectedText += (data.content || '');
+                setLiveAgentMessage(collectedText);
+                if (setLiveStreamMsg) setLiveStreamMsg(collectedText);
+              } else if (data.type === 'approval_required') {
+                setPendingApproval(data);
+                const act = {
+                  type: 'approval_required',
+                  message: `⚠️ Action requires approval: ${data.tool} (${data.description || 'sensitive operation'})`
+                };
+                activitiesRef.current = [...activitiesRef.current, act];
+                setStreamActivities([...activitiesRef.current]);
+                if (setVisibleActivities) setVisibleActivities([...activitiesRef.current]);
+              } else if (data.type === 'tool_start') {
+                if (data.tool === 'open_visible_browser' || (data.args && data.args.visible)) {
+                  onTriggerVisibleWindow(true);
+                }
+                activitiesRef.current = [...activitiesRef.current, data];
+                setStreamActivities([...activitiesRef.current]);
+                if (setVisibleActivities) setVisibleActivities([...activitiesRef.current]);
+              } else if (data.type === 'status' || data.type === 'plan' || data.type === 'plan_summary' || data.type === 'tool_end' || data.type === 'reflection') {
                 activitiesRef.current = [...activitiesRef.current, data];
                 setStreamActivities([...activitiesRef.current]);
                 if (setVisibleActivities) setVisibleActivities([...activitiesRef.current]);
@@ -198,6 +246,7 @@ export default function ChatArea({
                 collectedText = data.content;
                 setLiveAgentMessage(data.content);
                 if (setLiveStreamMsg) setLiveStreamMsg(data.content);
+                fetchThreads();
               } else if (data.type === 'error') {
                 activitiesRef.current = [...activitiesRef.current, { type: 'error', message: data.message }];
                 setStreamActivities([...activitiesRef.current]);
@@ -232,12 +281,14 @@ export default function ChatArea({
       }
     } finally {
       setProcessing(false);
+      setPendingApproval(null);
       setStreamActivities([]);
       setLiveAgentMessage('');
       if (setLiveStreamMsg) setLiveStreamMsg('');
       abortControllerRef.current = null;
+      fetchThreads();
     }
-  }, [input, isProcessing, messages, addMessage, setInput, setProcessing, onTriggerVisibleWindow, setVisibleActivities, setLiveStreamMsg, setLiveAgentMessage, liveAgentMessage]);
+  }, [input, isProcessing, messages, activeThreadId, addMessage, setInput, setProcessing, onTriggerVisibleWindow, setVisibleActivities, setLiveStreamMsg, setPendingApproval, fetchThreads]);
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -306,15 +357,88 @@ export default function ChatArea({
             </div>
             <div>
               <h2 className="text-lg font-bold text-[var(--fg-primary)]">Active Workspace</h2>
-              <p className="text-xs text-[var(--fg-muted)]">Chat with your autonomous agent</p>
+              <p className="text-xs text-[var(--fg-muted)]">Autonomous agent with approval gating</p>
             </div>
           </div>
           {healthData && (
-            <span className="badge badge-brand font-mono">
+            <span className="badge badge-brand font-mono text-xs hidden sm:inline-flex">
               {healthData.active_provider}:{healthData.active_model_id}
             </span>
           )}
+
+          {/* Conversation Thread Selector */}
+          <div className="relative ml-2" ref={threadMenuRef}>
+            <button
+              onClick={() => setShowThreadMenu(!showThreadMenu)}
+              className="btn btn-ghost btn-sm gap-2 text-xs font-medium border border-[var(--border-default)] bg-[var(--bg-elevated)] max-w-[200px]"
+              title="Switch conversation thread"
+            >
+              <MessageSquare size={13} className="text-[var(--brand-400)] shrink-0" />
+              <span className="truncate">
+                {threads.find(t => t.id === activeThreadId)?.title || "Current Conversation"}
+              </span>
+              <ChevronDown size={12} className="shrink-0 text-[var(--fg-muted)]" />
+            </button>
+
+            {showThreadMenu && (
+              <div className="absolute left-0 mt-1 w-72 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-default)] shadow-2xl z-50 p-2 max-h-72 overflow-y-auto custom-scrollbar">
+                <button
+                  onClick={async () => {
+                    setShowThreadMenu(false);
+                    await createThread("New Conversation");
+                  }}
+                  className="flex items-center gap-2 w-full p-2 text-xs font-semibold text-[var(--brand-400)] hover:bg-[var(--bg-input)] rounded-lg transition-colors mb-1"
+                >
+                  <Plus size={14} />
+                  <span>Start New Conversation</span>
+                </button>
+                <div className="my-1 border-t border-[var(--border-default)]" />
+                <div className="text-[10px] font-mono uppercase text-[var(--fg-muted)] px-2 py-1">Saved Threads</div>
+                {threads.length === 0 ? (
+                  <div className="p-3 text-xs text-[var(--fg-muted)] text-center">No saved conversations yet</div>
+                ) : (
+                  threads.map(t => (
+                    <div
+                      key={t.id}
+                      className={cn(
+                        "flex items-center justify-between p-2 rounded-lg text-xs hover:bg-[var(--bg-input)] cursor-pointer group transition-colors",
+                        activeThreadId === t.id && "bg-[var(--brand-500)]/15 text-[var(--brand-400)] font-medium"
+                      )}
+                      onClick={() => {
+                        selectThread(t.id);
+                        setShowThreadMenu(false);
+                      }}
+                    >
+                      <div className="flex flex-col min-w-0 pr-2">
+                        <span className="truncate font-medium text-[var(--fg-primary)]" title={t.title}>{t.title}</span>
+                        <span className="text-[10px] text-[var(--fg-muted)]">{t.created_at ? new Date(t.created_at).toLocaleDateString() : ''}</span>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteThread(t.id);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 hover:text-rose-400 p-1 rounded transition-opacity"
+                        title="Delete conversation"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={() => createThread("New Conversation")}
+            className="btn btn-ghost btn-sm p-1.5 text-[var(--fg-muted)] hover:text-[var(--brand-400)]"
+            title="Start New Conversation"
+          >
+            <Plus size={15} />
+          </button>
         </div>
+
         <div className="flex items-center gap-2">
           {isProcessing && (
             <button
@@ -337,6 +461,58 @@ export default function ChatArea({
           )}
         </div>
       </div>
+
+      {/* Human-in-the-Loop Approval Banner */}
+      <AnimatePresence>
+        {pendingApproval && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: -10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: -10 }}
+            className="mb-4 p-4 rounded-2xl bg-amber-500/10 border-2 border-amber-500/40 shadow-xl backdrop-blur-md"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+                <ShieldAlert size={22} className="animate-pulse" />
+              </div>
+              <div className="flex-1 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-sm text-[var(--fg-primary)]">Human-in-the-Loop Approval Required</h3>
+                    <span className="badge bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] uppercase font-mono px-2 py-0.5 rounded font-bold">
+                      {pendingApproval.risk_level || 'HIGH RISK'}
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-[var(--fg-muted)] font-mono">ID: {pendingApproval.approval_id?.slice(0, 8)}</span>
+                </div>
+                <p className="text-xs text-[var(--fg-secondary)] leading-relaxed">
+                  {pendingApproval.description || `The agent is requesting permission to execute tool '${pendingApproval.tool}'.`}
+                </p>
+                <div className="p-2.5 rounded-lg bg-[var(--bg-deep)] border border-[var(--border-default)] font-mono text-xs text-amber-300 break-all select-all flex items-center gap-2">
+                  <span className="text-[var(--fg-muted)] select-none">$</span>
+                  <span>{pendingApproval.args?.command || pendingApproval.args?.path || JSON.stringify(pendingApproval.args)}</span>
+                </div>
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    onClick={() => resolveApproval(pendingApproval.approval_id, true)}
+                    className="btn btn-sm bg-emerald-600 hover:bg-emerald-500 text-white font-medium gap-1.5 shadow-sm px-4"
+                  >
+                    <Check size={14} />
+                    <span>Approve &amp; Continue</span>
+                  </button>
+                  <button
+                    onClick={() => resolveApproval(pendingApproval.approval_id, false)}
+                    className="btn btn-sm btn-ghost text-rose-400 hover:bg-rose-500/15 font-medium gap-1.5 px-4"
+                  >
+                    <X size={14} />
+                    <span>Deny &amp; Abort Action</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-5 pr-2 custom-scrollbar">

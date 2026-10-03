@@ -2,6 +2,7 @@ import os
 import sys
 import json
 from pathlib import Path
+from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -54,21 +55,23 @@ def _setup_production_logging():
 _setup_production_logging()
 
 # Project Root & Workspace Directory
+# Note: DEFAULT_WORKSPACE_DIR is strictly kept inside DATA_DIR / "workspace",
+# ensuring the agent can never target or overwrite repository source files by default.
 PROJECT_ROOT = Path(sys.executable).resolve().parent if IS_FROZEN else Path(__file__).resolve().parent.parent
-DEFAULT_WORKSPACE_DIR = (DATA_DIR / "workspace") if IS_FROZEN else PROJECT_ROOT
+DEFAULT_WORKSPACE_DIR = Path(os.getenv("RAJJO_WORKSPACE_DIR", str(DATA_DIR / "workspace"))).resolve()
 DEFAULT_WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Default Settings
+# Default Settings (read documented environment variables as defaults)
 DEFAULT_SETTINGS = {
-    "active_provider": "universal",
-    "active_model_id": "deepseek-chat",
+    "active_provider": os.getenv("RAJJO_DEFAULT_PROVIDER", "universal"),
+    "active_model_id": os.getenv("RAJJO_DEFAULT_MODEL", "deepseek-chat"),
     "custom_base_url": "",
     "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-    "gguf_model_path": "",
+    "gguf_model_path": os.getenv("RAJJO_GGUF_MODEL_PATH", ""),
     "data_dir": str(DATA_DIR),
     "workspace_dir": str(DEFAULT_WORKSPACE_DIR),
-    "max_iterations": 10,
-    "shell_timeout": 30,
+    "max_iterations": int(os.getenv("RAJJO_MAX_ITERATIONS", "10")),
+    "shell_timeout": int(os.getenv("RAJJO_SHELL_TIMEOUT", "30")),
     "shell_confirm_destructive": True,
     "theme": "dark",
     "default_language": "en",
@@ -78,10 +81,35 @@ DEFAULT_SETTINGS = {
     "reduce_motion": False,
     "ui_density": "comfortable",
     "accent_color": "brand",
-    "http_proxy": "",
-    "https_proxy": "",
-    "no_proxy": "localhost,127.0.0.1,.local",
+    "http_proxy": os.getenv("HTTP_PROXY", os.getenv("http_proxy", "")),
+    "https_proxy": os.getenv("HTTPS_PROXY", os.getenv("https_proxy", "")),
+    "no_proxy": os.getenv("NO_PROXY", os.getenv("no_proxy", "localhost,127.0.0.1,.local")),
 }
+
+def apply_proxy_settings(settings: Optional[dict] = None):
+    """Applies configured proxy settings to process environment so all HTTP clients respect them."""
+    s = settings or load_settings()
+    http_proxy = s.get("http_proxy", "").strip()
+    https_proxy = s.get("https_proxy", "").strip()
+    no_proxy = s.get("no_proxy", "").strip()
+
+    if http_proxy:
+        os.environ["HTTP_PROXY"] = http_proxy
+        os.environ["http_proxy"] = http_proxy
+    else:
+        os.environ.pop("HTTP_PROXY", None)
+        os.environ.pop("http_proxy", None)
+
+    if https_proxy:
+        os.environ["HTTPS_PROXY"] = https_proxy
+        os.environ["https_proxy"] = https_proxy
+    else:
+        os.environ.pop("HTTPS_PROXY", None)
+        os.environ.pop("https_proxy", None)
+
+    if no_proxy:
+        os.environ["NO_PROXY"] = no_proxy
+        os.environ["no_proxy"] = no_proxy
 
 def load_settings() -> dict:
     if CONFIG_PATH.exists():
@@ -99,7 +127,11 @@ def save_settings(settings: dict) -> dict:
     current.update(settings)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(current, f, indent=2)
+    apply_proxy_settings(current)
     return current
+
+# Apply on module initialization
+apply_proxy_settings()
 
 def get_workspace_dir() -> Path:
     """Returns the validated active workspace directory path."""
@@ -108,8 +140,8 @@ def get_workspace_dir() -> Path:
     if ws:
         try:
             p = Path(ws).resolve()
-            if p.exists() and p.is_dir():
-                return p
+            p.mkdir(parents=True, exist_ok=True)
+            return p
         except Exception:
             pass
     return DEFAULT_WORKSPACE_DIR

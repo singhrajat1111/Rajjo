@@ -11,6 +11,7 @@ backend/build/
 *.exe
 *.msi
 *.spec
+!backend/rajjo_backend.spec
 
 # Python cache and tooling
 __pycache__/
