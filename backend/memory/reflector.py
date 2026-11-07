@@ -18,7 +18,8 @@ class ReflectorService:
         r"<script",
         r"javascript:",
         r"\bdrop\s+table\b",
-        r"base64",
+        # Only block base64-encoded payloads (long strings), not the word "base64" in legitimate technical text
+        r"base64[,;\s]+[A-Za-z0-9+/]{20,}={0,2}",
     ]
 
     def _sanitize_lesson(self, text: str) -> Optional[str]:

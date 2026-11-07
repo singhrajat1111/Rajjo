@@ -49,7 +49,7 @@ const SidebarItem = ({ tab, active, onClick, isCollapsed }) => (
       'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200',
       'group relative overflow-hidden',
       active
-        ? 'bg-cyan-500/10 text-[var(--brand-300)] border border-cyan-500/20'
+        ? 'bg-cyan-500/10 text-[var(--brand-400)] border border-cyan-500/20'
         : 'text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-hover)]'
     )}
     title={isCollapsed ? tab.label : undefined}
@@ -98,7 +98,7 @@ export default function Sidebar({
           {!isCollapsed && (
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-xl bg-gradient-brand flex items-center justify-center">
-                <span className="font-black text-[var(--fg-primary)] text-sm">R</span>
+                <span className="font-black text-white text-sm">R</span>
               </div>
               <span className="font-bold text-[var(--fg-primary)] tracking-tight">Rajjo</span>
             </div>

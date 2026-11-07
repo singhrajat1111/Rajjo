@@ -171,9 +171,28 @@ export default function App() {
     };
   }, [checkHealth, fetchModels]);
 
-  // Apply theme to document
+  // Apply theme to document with live system color-scheme listener
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
+    const applyTheme = (currentTheme) => {
+      let resolved = currentTheme;
+      if (currentTheme === 'system') {
+        resolved = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+          ? 'light'
+          : 'dark';
+      }
+      document.documentElement.setAttribute('data-theme', resolved);
+      document.documentElement.classList.toggle('light', resolved === 'light');
+      document.documentElement.classList.toggle('dark', resolved === 'dark');
+    };
+
+    applyTheme(theme);
+
+    if (theme === 'system' && window.matchMedia) {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+      const listener = () => applyTheme('system');
+      mediaQuery.addEventListener('change', listener);
+      return () => mediaQuery.removeEventListener('change', listener);
+    }
   }, [theme]);
 
   const handleAbortTask = useCallback(() => {

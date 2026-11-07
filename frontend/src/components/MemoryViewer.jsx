@@ -149,7 +149,7 @@ export default function MemoryViewer() {
             onClick={() => setTab('episodic')}
             className={cn(
               'px-4 py-2 rounded-lg text-sm font-semibold transition-all',
-              tab === 'episodic' ? 'bg-[var(--brand-500)] text-[var(--fg-primary)]' : 'text-[var(--fg-muted)] hover:text-[var(--fg-primary)]'
+              tab === 'episodic' ? 'bg-[var(--brand-500)] text-white' : 'text-[var(--fg-muted)] hover:text-[var(--fg-primary)]'
             )}
           >
             Episodic Tasks ({episodicTasks.length})
@@ -158,7 +158,7 @@ export default function MemoryViewer() {
             onClick={() => setTab('semantic')}
             className={cn(
               'px-4 py-2 rounded-lg text-sm font-semibold transition-all',
-              tab === 'semantic' ? 'bg-[var(--brand-500)] text-[var(--fg-primary)]' : 'text-[var(--fg-muted)] hover:text-[var(--fg-primary)]'
+              tab === 'semantic' ? 'bg-[var(--brand-500)] text-white' : 'text-[var(--fg-muted)] hover:text-[var(--fg-primary)]'
             )}
           >
             Semantic Insights ({semanticMemories.length})

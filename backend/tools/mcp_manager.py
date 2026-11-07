@@ -4,16 +4,18 @@ import json
 import subprocess
 import threading
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from langchain_core.tools import tool, StructuredTool
 from pydantic import create_model, Field
 
 try:
     from backend.config import load_settings, save_settings
     from backend.tools.registry import registry
+    from backend.tools.shell_tools import get_sanitized_environment
 except ImportError:
     from config import load_settings, save_settings
     from tools.registry import registry
+    from tools.shell_tools import get_sanitized_environment
 
 
 class MCPClientConnection:
@@ -35,7 +37,13 @@ class MCPClientConnection:
     def connect(self) -> bool:
         with self._lock:
             try:
-                full_env = os.environ.copy()
+                # Use a sanitized base environment (strips API keys / Rajjo secrets)
+                # then layer the server-specific env on top.
+                try:
+                    from backend.tools.shell_tools import get_sanitized_environment
+                except ImportError:
+                    from tools.shell_tools import get_sanitized_environment
+                full_env = get_sanitized_environment()
                 full_env.update(self.env)
                 # Ensure node and python paths are resolvable
                 cmd_list = [self.command] + self.args
@@ -177,11 +185,13 @@ class MCPManager:
             is_connected = client.connected if client else False
             tools_count = len(client.tools) if client else 0
             tools_list = [t.get("name") for t in (client.tools if client else [])]
+            # Mask env values to avoid leaking secrets via the API
+            masked_env = {k: "••••••••" if v else "" for k, v in s.get("env", {}).items()}
             result.append({
                 "name": name,
                 "command": s.get("command", ""),
                 "args": s.get("args", []),
-                "env": s.get("env", {}),
+                "env": masked_env,
                 "enabled": s.get("enabled", True),
                 "status": "connected" if is_connected else ("disabled" if not s.get("enabled", True) else "disconnected"),
                 "tools_count": tools_count,
@@ -259,6 +269,40 @@ class MCPManager:
             tool_name = f"mcp_{client.name}_{t['name']}"
             tool_desc = t.get("description", f"MCP Tool from {client.name}")
 
+            # Build a Pydantic model from the MCP server's inputSchema so the
+            # LLM sees real typed parameters instead of a single opaque **kwargs.
+            input_schema = t.get("inputSchema", {})
+            properties = input_schema.get("properties", {})
+            required_fields = set(input_schema.get("required", []))
+
+            field_definitions: Dict[str, Any] = {}
+            for prop_name, prop_meta in properties.items():
+                prop_type = prop_meta.get("type", "string")
+                prop_desc = prop_meta.get("description", prop_name)
+                # Map JSON Schema types to Python types
+                py_type: Any = str
+                if prop_type == "integer":
+                    py_type = int
+                elif prop_type == "number":
+                    py_type = float
+                elif prop_type == "boolean":
+                    py_type = bool
+                elif prop_type == "array":
+                    py_type = list
+                elif prop_type == "object":
+                    py_type = dict
+
+                if prop_name in required_fields:
+                    field_definitions[prop_name] = (py_type, Field(..., description=prop_desc))
+                else:
+                    field_definitions[prop_name] = (Optional[py_type], Field(None, description=prop_desc))
+
+            if field_definitions:
+                schema_model = create_model(f"{tool_name}_schema", **field_definitions)
+            else:
+                # No schema defined: accept any kwargs
+                schema_model = None
+
             # Define invocation closure
             def make_invoker(cli: MCPClientConnection, orig_name: str):
                 def invoke_tool(**kwargs):
@@ -269,12 +313,20 @@ class MCPManager:
             fn.__name__ = tool_name
             fn.__doc__ = tool_desc
 
-            # Create structured tool
-            st_tool = StructuredTool.from_function(
-                func=fn,
-                name=tool_name,
-                description=tool_desc
-            )
+            # Create structured tool with proper schema
+            if schema_model:
+                st_tool = StructuredTool.from_function(
+                    func=fn,
+                    name=tool_name,
+                    description=tool_desc,
+                    args_schema=schema_model,
+                )
+            else:
+                st_tool = StructuredTool.from_function(
+                    func=fn,
+                    name=tool_name,
+                    description=tool_desc,
+                )
             registry.register_tool(
                 tool=st_tool,
                 category=f"MCP ({client.name})",

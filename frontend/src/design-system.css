@@ -373,20 +373,22 @@ body {
 /* Variants */
 .btn-primary {
   background: var(--brand-500);
-  color: var(--fg-primary);
+  color: #ffffff;
   border-color: var(--brand-500);
   box-shadow: var(--shadow-sm);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--brand-400);
-  border-color: var(--brand-400);
+  background: var(--brand-600);
+  color: #ffffff;
+  border-color: var(--brand-600);
   box-shadow: var(--glow-brand);
   transform: translateY(-1px);
 }
 
 .btn-primary:active:not(:disabled) {
-  background: var(--brand-600);
+  background: var(--brand-700);
+  color: #ffffff;
   transform: translateY(0);
 }
 
@@ -422,12 +424,13 @@ body {
 
 .btn-danger {
   background: var(--danger);
-  color: var(--fg-primary);
+  color: #ffffff;
   border-color: var(--danger);
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: oklch(0.52 0.18 25);
+  background: oklch(0.48 0.19 25);
+  color: #ffffff;
   box-shadow: var(--glow-danger);
 }
 

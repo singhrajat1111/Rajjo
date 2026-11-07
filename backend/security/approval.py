@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import uuid
 import re
 from typing import Dict, Any, Optional, Callable
@@ -11,7 +12,9 @@ class PendingApproval:
     tool_args: Dict[str, Any]
     description: str
     risk_level: str
-    event: asyncio.Event = field(default_factory=asyncio.Event)
+    # asyncio.Event for async callers, threading.Event for sync/worker-thread callers
+    async_event: asyncio.Event = field(default_factory=asyncio.Event)
+    sync_event: threading.Event = field(default_factory=threading.Event)
     approved: Optional[bool] = None
 
 class ApprovalManager:
@@ -26,10 +29,18 @@ class ApprovalManager:
 
     def __init__(self):
         self._pending: Dict[str, PendingApproval] = {}
-        self._event_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._callbacks: Set[Callable[[Dict[str, Any]], None]] = set()
+
+    def add_event_callback(self, cb: Callable[[Dict[str, Any]], None]):
+        self._callbacks.add(cb)
+
+    def remove_event_callback(self, cb: Callable[[Dict[str, Any]], None]):
+        self._callbacks.discard(cb)
 
     def set_event_callback(self, cb: Callable[[Dict[str, Any]], None]):
-        self._event_callback = cb
+        # Backward compatibility
+        self._callbacks.clear()
+        self._callbacks.add(cb)
 
     def is_destructive_shell_command(self, command: str) -> bool:
         cmd = command.strip().lower()
@@ -96,16 +107,16 @@ class ApprovalManager:
             "risk_level": risk_level
         }
 
-        if self._event_callback:
+        for cb in list(self._callbacks):
             try:
-                res = self._event_callback(payload)
+                res = cb(payload)
                 if asyncio.iscoroutine(res):
                     await res
             except Exception as e:
                 print(f"[ApprovalManager] Callback error: {e}")
 
         try:
-            await asyncio.wait_for(item.event.wait(), timeout=timeout_seconds)
+            await asyncio.wait_for(item.async_event.wait(), timeout=timeout_seconds)
             return bool(item.approved)
         except asyncio.TimeoutError:
             print(f"[ApprovalManager] Approval {approval_id} timed out.")
@@ -113,11 +124,68 @@ class ApprovalManager:
         finally:
             self._pending.pop(approval_id, None)
 
+    def request_approval_sync(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        description: str,
+        risk_level: str = "high",
+        timeout_seconds: float = 120.0,
+    ) -> bool:
+        """
+        Thread-safe, blocking approval request for use from worker threads
+        (e.g. LangGraph tool executors running via run_in_executor).
+
+        Uses threading.Event so it never touches an asyncio event loop from
+        the wrong thread, which is what caused the original 120-second stall.
+        The SSE event-callback is called synchronously (put_nowait is thread-safe).
+        """
+        approval_id = str(uuid.uuid4())
+        item = PendingApproval(
+            approval_id=approval_id,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            description=description,
+            risk_level=risk_level,
+        )
+        self._pending[approval_id] = item
+
+        payload = {
+            "type": "approval_required",
+            "approval_id": approval_id,
+            "tool": tool_name,
+            "args": tool_args,
+            "description": description,
+            "risk_level": risk_level,
+        }
+
+        for cb in list(self._callbacks):
+            try:
+                cb(payload)
+            except Exception as e:
+                print(f"[ApprovalManager] Callback error (sync): {e}")
+
+        signalled = item.sync_event.wait(timeout=timeout_seconds)
+        self._pending.pop(approval_id, None)
+        if not signalled:
+            print(f"[ApprovalManager] Approval {approval_id} timed out (sync).")
+            return False
+        return bool(item.approved)
+
     def resolve_approval(self, approval_id: str, approved: bool) -> bool:
         if approval_id in self._pending:
             item = self._pending[approval_id]
             item.approved = approved
-            item.event.set()
+            # Wake up both async and sync waiters
+            item.sync_event.set()
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.call_soon_threadsafe(item.async_event.set)
+                else:
+                    item.async_event.set()
+            except RuntimeError:
+                pass
             return True
         return False
 

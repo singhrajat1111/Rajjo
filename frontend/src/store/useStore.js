@@ -85,8 +85,13 @@ export const useStore = create((set, get) => ({
   commandPaletteOpen: false,
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   
-  theme: 'dark', // 'dark' | 'light' | 'system'
-  setTheme: (theme) => set({ theme }),
+  theme: (typeof window !== 'undefined' && localStorage.getItem('rajjo_theme')) || 'dark', // 'dark' | 'light' | 'system'
+  setTheme: (theme) => {
+    try {
+      if (typeof window !== 'undefined') localStorage.setItem('rajjo_theme', theme);
+    } catch (_) {}
+    set({ theme });
+  },
 
   // Backend Status
   backendOnline: false,
@@ -516,7 +521,7 @@ export const useStore = create((set, get) => ({
         const data = await res.json();
         set({ settingsData: data });
         if (data.settings?.theme) {
-          set({ theme: data.settings.theme });
+          get().setTheme(data.settings.theme);
         }
       }
     } catch (e) {
@@ -525,6 +530,9 @@ export const useStore = create((set, get) => ({
   },
   updateSettings: async (updates) => {
     try {
+      if (updates.theme) {
+        get().setTheme(updates.theme);
+      }
       const res = await authFetch(`${API_BASE}/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -533,6 +541,9 @@ export const useStore = create((set, get) => ({
       if (res.ok) {
         const data = await res.json();
         set({ settingsData: data });
+        if (data.settings?.theme) {
+          get().setTheme(data.settings.theme);
+        }
         await get().checkHealth();
         return true;
       }

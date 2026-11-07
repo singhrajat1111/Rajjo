@@ -1,6 +1,6 @@
-# Rajjo — Local-First Autonomous AI Desktop Agent
+# Rajjo — Local-First Autonomous AI Desktop Agent (Alpha)
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue)
+![Version](https://img.shields.io/badge/version-2.0.0--alpha-orange)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Backend](https://img.shields.io/badge/backend-FastAPI%20%2B%20LangGraph-brightgreen)
 ![Frontend](https://img.shields.io/badge/frontend-React%2018%20%2B%20Vite-61dafb)
@@ -8,7 +8,9 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![CI](https://img.shields.io/badge/CI-passing-brightgreen)
 
-**Rajjo** is an open-source, local-first autonomous AI desktop agent designed to plan and execute multi-step tasks directly on your computer with strict security boundaries, human-in-the-loop approval gating, and token-by-token streaming. Built with Electron, React, FastAPI, and LangGraph, Rajjo safely executes shell and filesystem operations, automates web browsing, remembers context across sessions, and operates with local LLMs (Ollama, cached GGUF) or cloud APIs.
+**Rajjo** is an open-source, local-first autonomous AI desktop agent in active alpha development. It is designed to plan and execute multi-step tasks directly on your computer with strict security boundaries, human-in-the-loop approval gating, and token-by-token streaming. Built with Electron, React, FastAPI, and LangGraph, Rajjo executes shell and filesystem operations, automates web browsing, remembers context across sessions, and operates with local LLMs (Ollama, GGUF) or cloud APIs (OpenAI, Anthropic, Groq, Gemini, OpenRouter).
+
+> **Note on Data Flow**: While Rajjo is local-first (settings, SQLite history, and memory databases stay on your machine), using cloud providers sends prompts and context to the selected model provider's API. For 100% offline data confinement, configure local Ollama or GGUF.
 
 ---
 
@@ -269,6 +271,20 @@ npm run build:backend
 # 3. Package Electron desktop installer
 npm run dist
 ```
+
+---
+
+## 🔒 Threat Model & Known Limitations
+
+### Threat Model
+- **Untrusted Context**: Outputs from web searches, visited web pages, and MCP servers may contain prompt injection attempts. Rajjo isolates sensitive paths (`.env`, `.session_token`, `.ssh`, `.aws`) and enforces human approval gating on destructive commands and critical tool executions.
+- **Process Isolation**: External shell commands run in separate process groups with scrubbed environment variables (stripping keys matching `*API_KEY*`, `RAJJO_*`, etc.) to prevent secret exfiltration to child processes.
+- **IPC & Local API Defense**: FastAPI endpoints require a session token authenticated via `hmac.compare_digest`. Electron isolates renderer context and denies arbitrary window creation or out-of-origin web navigation.
+
+### Known Limitations
+- **Multi-Agent Stubs**: Multi-agent orchestration (`/agents/spawn`) is currently experimental and not fully integrated into the primary task execution graph.
+- **Packaging Requirements**: Standalone packaged builds require Playwright Chromium to be downloaded on the host machine (`npx playwright install chromium`) if browser automation is used.
+- **GGUF Platform Support**: Direct in-process GGUF acceleration requires native C++ runtime compilation or precompiled platform wheels (`llama-cpp-python`).
 
 ---
 

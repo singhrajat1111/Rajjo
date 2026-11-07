@@ -3,6 +3,7 @@ import json
 import uuid
 import math
 import re
+import hashlib
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -30,14 +31,14 @@ class DeterministicLocalEmbedder:
         if not tokens:
             return vec
         for tok in tokens:
-            # Hash token into dimension buckets
-            h = hash(tok)
-            idx = abs(h) % self.dim
+            # Use hashlib.md5 for a stable (non-randomized) hash across processes
+            h = int(hashlib.md5(tok.encode("utf-8")).hexdigest(), 16)
+            idx = h % self.dim
             vec[idx] += 1.0
-            # Also hash bigrams for sequence awareness
+            # Also hash trigrams for sequence awareness
             for i in range(len(tok) - 2):
                 tri = tok[i:i+3]
-                idx_tri = abs(hash(tri)) % self.dim
+                idx_tri = int(hashlib.md5(tri.encode("utf-8")).hexdigest(), 16) % self.dim
                 vec[idx_tri] += 0.5
 
         # L2 Normalize

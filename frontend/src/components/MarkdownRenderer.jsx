@@ -17,31 +17,31 @@ const CodeBlock = ({ inline, className, children, ...props }) => {
 
   if (inline) {
     return (
-      <code className="px-1.5 py-0.5 mx-0.5 rounded-md bg-blue-950/40 text-blue-300 border border-blue-800/40 font-mono text-[11px]" {...props}>
+      <code className="px-1.5 py-0.5 mx-0.5 rounded-md bg-[var(--bg-hover)] text-[var(--brand-400)] border border-[var(--border-default)] font-mono text-[11px]" {...props}>
         {children}
       </code>
     );
   }
 
   return (
-    <div className="my-3 rounded-xl overflow-hidden border border-gray-800 bg-[#0c0d14] shadow-md group">
+    <div className="my-3 rounded-xl overflow-hidden border border-[var(--border-default)] bg-[var(--bg-deep)] shadow-sm group">
       {/* Code Header Bar */}
-      <div className="flex items-center justify-between px-3.5 py-1.5 bg-[#12131c] border-b border-gray-800 text-[11px] select-none">
-        <div className="flex items-center gap-2 text-gray-400 font-mono font-medium">
-          <Terminal size={12} className="text-blue-400" />
-          <span className="uppercase text-[10px] tracking-wider text-gray-300 font-semibold">
+      <div className="flex items-center justify-between px-3.5 py-1.5 bg-[var(--bg-hover)] border-b border-[var(--border-default)] text-[11px] select-none">
+        <div className="flex items-center gap-2 text-[var(--fg-muted)] font-mono font-medium">
+          <Terminal size={12} className="text-[var(--brand-400)]" />
+          <span className="uppercase text-[10px] tracking-wider text-[var(--fg-secondary)] font-semibold">
             {language || 'code'}
           </span>
         </div>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-0.5 rounded-md hover:bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors text-[10px]"
+          className="flex items-center gap-1 px-2 py-0.5 rounded-md hover:bg-[var(--bg-active)] text-[var(--fg-muted)] hover:text-[var(--fg-primary)] transition-colors text-[10px]"
           title="Copy code to clipboard"
         >
           {copied ? (
             <>
-              <Check size={12} className="text-emerald-400" />
-              <span className="text-emerald-400 font-medium">Copied!</span>
+              <Check size={12} className="text-[var(--success)]" />
+              <span className="text-[var(--success)] font-medium">Copied!</span>
             </>
           ) : (
             <>
@@ -53,7 +53,7 @@ const CodeBlock = ({ inline, className, children, ...props }) => {
       </div>
 
       {/* Code Body */}
-      <pre className="p-3.5 overflow-x-auto text-[11.5px] font-mono leading-relaxed text-gray-200 custom-scrollbar">
+      <pre className="p-3.5 overflow-x-auto text-[11.5px] font-mono leading-relaxed text-[var(--fg-primary)] custom-scrollbar">
         <code className={className} {...props}>
           {children}
         </code>
@@ -76,30 +76,30 @@ export default function MarkdownRenderer({ content, className = '' }) {
     .replace(/\$\\Leftarrow\$/g, ' ⇐ ');
 
   return (
-    <div className={`prose prose-invert max-w-none text-xs leading-relaxed ${className}`}>
+    <div className={`prose dark:prose-invert max-w-none text-xs leading-relaxed text-[var(--fg-primary)] ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           code: CodeBlock,
           table: ({ children }) => (
-            <div className="my-3 overflow-x-auto rounded-xl border border-gray-800 bg-gray-950/60 shadow-sm">
+            <div className="my-3 overflow-x-auto rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] shadow-sm">
               <table className="w-full text-left text-xs border-collapse">
                 {children}
               </table>
             </div>
           ),
           thead: ({ children }) => (
-            <thead className="bg-gray-900/90 border-b border-gray-800 text-gray-200 font-semibold">
+            <thead className="bg-[var(--bg-hover)] border-b border-[var(--border-default)] text-[var(--fg-primary)] font-semibold">
               {children}
             </thead>
           ),
           tbody: ({ children }) => (
-            <tbody className="divide-y divide-gray-800/60 text-gray-300">
+            <tbody className="divide-y divide-[var(--border-subtle)] text-[var(--fg-secondary)]">
               {children}
             </tbody>
           ),
           tr: ({ children }) => (
-            <tr className="hover:bg-gray-900/40 transition-colors">
+            <tr className="hover:bg-[var(--bg-hover)] transition-colors">
               {children}
             </tr>
           ),

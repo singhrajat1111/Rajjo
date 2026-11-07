@@ -84,8 +84,11 @@ def read_file(path: str, max_chars: int = 20000) -> str:
     Reads the text content of a file within the workspace boundary.
     Args:
         path: Path to the file to read (relative to workspace or within workspace root).
-        max_chars: Maximum characters to read (default: 20000).
+        max_chars: Maximum characters to read (default: 20000, hard cap: 102400).
     """
+    # Hard cap: never return more than 100 KB regardless of caller-supplied value
+    MAX_HARD_CAP = 102_400
+    max_chars = min(max_chars, MAX_HARD_CAP)
     try:
         p = safe_resolve_path(path)
     except SecurityPathViolation as spv:

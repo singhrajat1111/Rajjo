@@ -596,7 +596,7 @@ export default function ChatArea({
               <div className={cn(
                 'w-8 h-8 rounded-xl flex items-center justify-center shrink-0 shadow-sm',
                 msg.role === 'user'
-                  ? 'bg-[var(--brand-500)] text-[var(--fg-primary)]'
+                  ? 'bg-[var(--brand-500)] text-white'
                   : 'bg-[var(--bg-elevated)] text-[var(--brand-400)] border border-cyan-500/30'
               )}>
                 {msg.role === 'user' ? <User size={18} /> : <Bot size={18} />}
@@ -605,7 +605,7 @@ export default function ChatArea({
               <div className={cn(
                 'max-w-[85%] rounded-2xl p-4 text-sm leading-relaxed space-y-3',
                 msg.role === 'user'
-                  ? 'bg-[var(--brand-500)] text-[var(--fg-primary)] shadow-[var(--shadow-md)]'
+                  ? 'bg-[var(--brand-500)] text-white shadow-[var(--shadow-md)]'
                   : msg.isError
                     ? 'bg-[var(--danger-bg)] border border-[var(--danger-border)] text-[var(--danger)]'
                     : 'bg-[var(--bg-elevated)] border border-[var(--border-default)] text-[var(--fg-secondary)] shadow-[var(--shadow-sm)]'

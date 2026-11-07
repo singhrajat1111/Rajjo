@@ -1,8 +1,10 @@
 import os
+import sys
 import subprocess
 import time
 import json
 import re
+import threading
 import asyncio
 from typing import Optional, List, Dict, Any
 from langchain_core.tools import tool
@@ -159,39 +161,24 @@ def run_shell_command(command: str, timeout: Optional[int] = None) -> str:
     )
 
     # 2. Enforce Approval Gate if required
+    # The tool runs in a worker thread (LangGraph executes sync tools via
+    # run_in_executor). Calling asyncio.run() from a thread that already has a
+    # running loop raises RuntimeError; run_coroutine_threadsafe across two
+    # different loops is unreliable. We solve this cleanly with a threading.Event
+    # and the main-loop approval manager that uses its own asyncio.Event internally.
     if requires_approval:
         try:
-            loop = None
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
             desc = f"Shell command execution requested: '{command}'"
             if risk_violation:
                 desc += f" [Security Warning: {risk_violation}]"
 
-            approved = False
-            if loop and loop.is_running():
-                future = asyncio.run_coroutine_threadsafe(
-                    approval_manager.request_approval(
-                        tool_name="run_shell_command",
-                        tool_args={"command": command},
-                        description=desc,
-                        risk_level="high" if risk_violation else "normal"
-                    ),
-                    loop
-                )
-                approved = future.result(timeout=120)
-            else:
-                approved = asyncio.run(
-                    approval_manager.request_approval(
-                        tool_name="run_shell_command",
-                        tool_args={"command": command},
-                        description=desc,
-                        risk_level="high" if risk_violation else "normal"
-                    )
-                )
+            approved = approval_manager.request_approval_sync(
+                tool_name="run_shell_command",
+                tool_args={"command": command},
+                description=desc,
+                risk_level="high" if risk_violation else "normal",
+                timeout_seconds=120,
+            )
 
             if not approved:
                 return json.dumps({
@@ -219,18 +206,25 @@ def run_shell_command(command: str, timeout: Optional[int] = None) -> str:
             }, indent=2)
 
     # 3. Execute with tracked process tree
+    # POSIX: start_new_session=True puts the child in its own process group so
+    # kill_process_tree(pgid) cannot accidentally kill the backend itself.
+    # Windows: CREATE_NEW_PROCESS_GROUP achieves the same isolation.
     start_time = time.time()
     proc = None
+    popen_kwargs = dict(
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=str(workspace_root),
+        env=get_sanitized_environment(),
+    )
+    if sys.platform == "win32":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
     try:
-        proc = subprocess.Popen(
-            command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=str(workspace_root),
-            env=get_sanitized_environment()
-        )
+        proc = subprocess.Popen(command, **popen_kwargs)
         process_manager.register_process(proc.pid)
 
         stdout, stderr = proc.communicate(timeout=configured_timeout)

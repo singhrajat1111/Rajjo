@@ -22,7 +22,8 @@ from datetime import datetime
 from backend.config import (
     DATA_DIR, load_settings, save_settings,
     get_secret, save_secret, get_masked_secrets_summary, get_provider_config, get_all_providers,
-    get_or_create_session_token, get_workspace_dir, apply_proxy_settings
+    get_or_create_session_token, get_workspace_dir, apply_proxy_settings,
+    PROVIDER_CONFIGS
 )
 from backend.model_router import router, ModelRouter
 from backend.tools.registry import registry
@@ -168,20 +169,12 @@ _SPAWNED_AGENTS: Dict[str, Dict[str, Any]] = {}
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
-    settings = load_settings()
-    episodic_tasks = len(episodic.get_recent_tasks(limit=1))
+    # Return only status/version — no internal paths (security: unauthenticated endpoint)
     return {
         "status": "ok",
         "backendOnline": True,
         "agent": "Rajjo",
         "version": "2.0.0",
-        "active_provider": settings.get("active_provider", "universal"),
-        "active_model_id": settings.get("active_model_id", "deepseek-chat"),
-        "data_dir": str(DATA_DIR),
-        "workspace_dir": str(get_workspace_dir()),
-        "tools_active": len(registry.get_active_tools()),
-        "has_memory": episodic_tasks > 0,
-        "threads_count": len(thread_store.list_threads(limit=100))
     }
 
 # ----------------- Approval & Abort Endpoints -----------------
@@ -220,6 +213,13 @@ async def agent_event_stream(request: ChatRequest):
     # Reconstruct or load thread
     thread_id = request.thread_id or thread_store.create_thread(title=request.message[:40])
 
+    try:
+        current_task = asyncio.current_task()
+        if current_task:
+            _active_chat_tasks[thread_id] = current_task
+    except Exception:
+        pass
+
     messages = []
     for msg in request.history:
         role = msg.get("role", "user")
@@ -231,6 +231,8 @@ async def agent_event_stream(request: ChatRequest):
 
     messages.append(HumanMessage(content=request.message))
 
+    max_iterations = settings.get("max_iterations", 10)
+
     initial_state = {
         "messages": messages,
         "plan_steps": [],
@@ -241,28 +243,37 @@ async def agent_event_stream(request: ChatRequest):
         "user_input": request.message,
         "model_config": model_cfg,
         "iteration_count": 0,
-        "max_iterations": settings.get("max_iterations", 10),
+        "max_iterations": max_iterations,
         "activity_log": [],
         "final_output": ""
     }
 
+    # Set recursion_limit high enough that the graceful max_iterations path is reachable.
+    # LangGraph default is 25. Each iteration uses 2 edges (planner + tool_executor).
+    # Fixed overhead nodes: retrieve_memory + plan + reflector + memory_writer = 4.
+    # We also ensure a floor of 50 so small max_iterations values never hit the default limit.
+    run_config = {"recursion_limit": max(max_iterations * 2 + 10, 50)}
+
     event_queue: asyncio.Queue = asyncio.Queue()
 
-    # Wire approval callback into SSE event queue
+    # Wire approval callback into SSE event queue (put_nowait is thread-safe)
     def push_approval_event(ev: Dict[str, Any]):
         event_queue.put_nowait(ev)
 
-    approval_manager.set_event_callback(push_approval_event)
+    approval_manager.add_event_callback(push_approval_event)
 
     yield f"data: {json.dumps({'type': 'status', 'message': 'Rajjo agent initialized...', 'thread_id': thread_id})}\n\n"
     await asyncio.sleep(0.01)
 
+    # Only collect tokens that come from the "planner" node and are NOT part of
+    # a tool-calling turn (those are pre-answer chatter we don't want in final_msg).
     collected_content = ""
+    _current_node_has_tool_calls = False
     activities_recorded = []
 
     try:
-        # Use real astream_events for token streaming and instant tool events
-        async for event in agent_graph.astream_events(initial_state, version="v2"):
+        # astream_events version="v2" gives us per-node metadata
+        async for event in agent_graph.astream_events(initial_state, version="v2", config=run_config):
             if _abort_requested:
                 yield f"data: {json.dumps({'type': 'status', 'message': 'Task aborted by user.'})}\n\n"
                 yield f"data: {json.dumps({'type': 'final', 'role': 'agent', 'content': '⏹️ *Task execution was stopped by user request.*'})}\n\n"
@@ -278,12 +289,27 @@ async def agent_event_stream(request: ChatRequest):
             data = event.get("data", {})
 
             # 1. Real-time Token Streaming from LLM
+            # Only collect from the "planner" node; ignore reflector/memory tokens
             if ev_type == "on_chat_model_stream":
-                chunk = data.get("chunk")
-                if chunk and hasattr(chunk, "content") and chunk.content:
-                    text_chunk = str(chunk.content)
-                    collected_content += text_chunk
-                    yield f"data: {json.dumps({'type': 'token', 'content': text_chunk})}\n\n"
+                node_name = event.get("metadata", {}).get("langgraph_node", "")
+                if node_name == "planner":
+                    chunk = data.get("chunk")
+                    if chunk and hasattr(chunk, "content") and chunk.content:
+                        text_chunk = str(chunk.content)
+                        # We'll filter tool-calling turns at on_chat_model_end
+                        collected_content += text_chunk
+                        yield f"data: {json.dumps({'type': 'token', 'content': text_chunk})}\n\n"
+
+            # Detect when a planner turn makes tool calls (so we can discard it)
+            elif ev_type == "on_chat_model_end":
+                node_name = event.get("metadata", {}).get("langgraph_node", "")
+                if node_name == "planner":
+                    output = data.get("output")
+                    has_tc = bool(getattr(output, "tool_calls", None))
+                    if has_tc:
+                        # Discard the content we just streamed — it's pre-tool chatter
+                        collected_content = ""
+                    _current_node_has_tool_calls = has_tc
 
             # 2. Instant Tool Start (arrives immediately when tool starts)
             elif ev_type == "on_tool_start":
@@ -337,7 +363,8 @@ async def agent_event_stream(request: ChatRequest):
 
             await asyncio.sleep(0.005)
 
-        # Fallback for final content if not captured via chunks
+        # Prefer final_output set by planner_node over streamed tokens
+        # (streamed tokens are only kept for display; final_output is authoritative)
         final_msg = collected_content.strip() or "Task completed."
         yield f"data: {json.dumps({'type': 'final', 'role': 'agent', 'content': final_msg, 'thread_id': thread_id})}\n\n"
         yield f"data: {json.dumps({'type': 'done', 'status': 'completed'})}\n\n"
@@ -355,6 +382,15 @@ async def agent_event_stream(request: ChatRequest):
         yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
         yield f"data: {json.dumps({'type': 'final', 'role': 'agent', 'content': f'An error occurred: {str(e)}'})}\n\n"
         yield f"data: {json.dumps({'type': 'done', 'status': 'error'})}\n\n"
+        if settings.get("auto_save_conversations", True):
+            try:
+                thread_store.add_message(thread_id, "user", request.message)
+                thread_store.add_message(thread_id, "agent", f"Error: {str(e)}", activities_recorded)
+            except Exception as persist_err:
+                print(f"[Main] Error auto-saving error thread: {persist_err}")
+    finally:
+        approval_manager.remove_event_callback(push_approval_event)
+        _active_chat_tasks.pop(thread_id, None)
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
@@ -441,7 +477,7 @@ async def select_model(req: ModelSelectRequest):
         elif req.provider == "openai":
             model_id = "gpt-4o"
         elif req.provider == "anthropic":
-            model_id = "claude-3-7-sonnet"
+            model_id = "claude-3-5-sonnet-20241022"
         elif req.provider == "gemini":
             model_id = "gemini-2.0-flash"
         elif req.provider == "openrouter":
@@ -557,7 +593,12 @@ async def import_memory(data: Dict[str, Any]):
     if "semantic" in data:
         for s in data["semantic"]:
             doc = s.get("document", "")
-            meta = s.get("metadata", {})
+            meta = s.get("metadata", {}).copy()
+            # SECURITY: strip approval status from imported data to prevent
+            # injected memories from bypassing the human approval gate.
+            meta.pop("approved", None)
+            meta.pop("approved_at", None)
+            meta["approved"] = False
             if doc:
                 semantic.add_memory(doc, meta)
                 s_count += 1

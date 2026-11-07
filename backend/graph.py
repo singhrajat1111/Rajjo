@@ -77,16 +77,17 @@ def retrieve_memory_node(state: AgentState) -> Dict[str, Any]:
 
 def plan_node(state: AgentState) -> Dict[str, Any]:
     """
-    Explicit Plan Node: creates an initial breakdown of steps for the requested task.
+    Initial Plan Node: sets an execution skeleton based on user intent.
     """
     user_input = state.get("user_input", "")
     activity = list(state.get("activity_log", []))
 
-    # Form structured initial plan steps
+    # Form heuristic initial plan steps based on user intent
+    task_hint = user_input.strip()[:60] if user_input else "user task"
     steps = [
-        {"id": 1, "description": "Understand requirements & assess required tools", "status": "completed"},
-        {"id": 2, "description": "Execute necessary file, shell, or web actions", "status": "in_progress"},
-        {"id": 3, "description": "Synthesize verified findings and deliver final answer", "status": "pending"}
+        {"id": 1, "description": f"Analyze intent & dependencies: {task_hint}", "status": "completed"},
+        {"id": 2, "description": "Execute tool actions (file, shell, search, browser)", "status": "in_progress"},
+        {"id": 3, "description": "Synthesize results and formulate final response", "status": "pending"}
     ]
 
     activity.append({
@@ -204,6 +205,12 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     activity = list(state.get("activity_log", []))
     tool_outputs = []
 
+    try:
+        from backend.config import load_settings as _load_settings
+    except ImportError:
+        from config import load_settings as _load_settings
+    settings = _load_settings()
+
     for tool_call in getattr(last_message, "tool_calls", []):
         tool_name = tool_call["name"]
         tool_args = tool_call.get("args", {})
@@ -222,6 +229,27 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             activity_desc = f"Launching visible browser for: {tool_args.get('url', '')}"
 
         activity.append({"type": "tool_start", "tool": tool_name, "message": activity_desc, "args": tool_args})
+
+        # Central approval gate: check ApprovalManager.requires_approval before every tool
+        needs_gate = approval_manager.requires_approval(tool_name, tool_args, settings)
+        if needs_gate:
+            desc = f"Tool '{tool_name}' requires approval before execution."
+            approved = approval_manager.request_approval_sync(
+                tool_name=tool_name,
+                tool_args=tool_args,
+                description=desc,
+                risk_level="high",
+                timeout_seconds=120,
+            )
+            if not approved:
+                denied_msg = json.dumps({
+                    "success": False,
+                    "tool": tool_name,
+                    "error": {"code": "USER_REJECTED", "message": f"Tool '{tool_name}' was denied by user."}
+                })
+                activity.append({"type": "tool_end", "tool": tool_name, "success": False, "message": f"Tool '{tool_name}' denied by user."})
+                tool_outputs.append(ToolMessage(content=denied_msg, tool_call_id=tool_id, name=tool_name))
+                continue
 
         target_tool = registry.get_tool(tool_name)
         if target_tool and registry.is_enabled(tool_name):
@@ -292,8 +320,8 @@ def reflection_node(state: AgentState) -> Dict[str, Any]:
         lesson = reflector_service.reflect(user_input, history, model_cfg)
         if lesson:
             activity.append({"type": "reflection", "message": f"Insight proposed: {lesson}"})
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[Graph:reflection_node] Reflection error: {exc}")
 
     return {
         "scratchpad": lesson or "",
@@ -318,27 +346,37 @@ def memory_writer_node(state: AgentState) -> Dict[str, Any]:
                 metadata={"source": "task_reflection", "user_input": user_input[:100], "approved": False},
                 auto_approve=False
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[Graph:memory_writer_node] Semantic memory write error: {exc}")
 
     # 2. Save episodic memory record
     try:
         serializable_history = []
+        executed_tools = []
         for m in history:
             role = getattr(m, "type", "message")
             content = getattr(m, "content", "")
             tool_calls = getattr(m, "tool_calls", None)
+            if role == "tool":
+                executed_tools.append(getattr(m, "name", "tool"))
             serializable_history.append({
                 "role": role,
                 "content": content,
                 "tool_calls": tool_calls
             })
 
+        plan_desc = f"Steps executed via {', '.join(executed_tools)}" if executed_tools else "Direct answer formulation"
+        outcome_desc = state.get("final_output", "").strip()
+        if not outcome_desc:
+            outcome_desc = "Task completed successfully" if status == "completed" else f"Status: {status}"
+        else:
+            outcome_desc = outcome_desc[:200]
+
         episodic.save_task(
             user_input=user_input,
-            plan="Autonomous execution",
+            plan=plan_desc,
             history=serializable_history,
-            outcome="Task completed successfully" if status == "completed" else f"Status: {status}",
+            outcome=outcome_desc,
             status=status
         )
     except Exception as e:

@@ -58,17 +58,6 @@ export default function Header({
     }
   };
 
-  const handleMaximize = (e) => {
-    e?.stopPropagation();
-    if (window.electronAPI?.maximizeWindow) {
-      window.electronAPI.maximizeWindow();
-    } else if (document.fullscreenElement) {
-      document.exitFullscreen?.();
-    } else {
-      document.documentElement.requestFullscreen?.();
-    }
-  };
-
   const handleFullscreenToggle = (e) => {
     e?.stopPropagation();
     if (window.electronAPI?.fullscreenWindow) {
@@ -115,7 +104,7 @@ export default function Header({
 
   return (
     <header
-      onDoubleClick={handleMaximize}
+      onDoubleClick={handleFullscreenToggle}
       className="h-12 bg-[var(--bg-deep)] backdrop-blur-xl border-b border-[var(--border-default)] flex items-center justify-between px-4 drag-region relative z-[var(--z-sticky)] select-none"
     >
       {/* Left: Brand & Status */}
@@ -131,7 +120,7 @@ export default function Header({
 
         <div className="flex items-center gap-2 no-drag">
           <div className="w-7 h-7 rounded-lg bg-gradient-brand flex items-center justify-center shadow-sm">
-            <span className="font-black text-[var(--fg-primary)] text-xs">R</span>
+            <span className="font-black text-white text-xs">R</span>
           </div>
           <span className="font-bold text-[var(--fg-primary)] text-sm tracking-tight hidden xs:inline">
             Rajjo
@@ -322,7 +311,7 @@ export default function Header({
             aria-label="User menu"
             title="User Profile & Settings"
           >
-            <div className="w-6 h-6 rounded-full bg-gradient-brand flex items-center justify-center text-[var(--fg-primary)]">
+            <div className="w-6 h-6 rounded-full bg-gradient-brand flex items-center justify-center text-white">
               <User size={12} />
             </div>
           </button>
@@ -386,7 +375,7 @@ export default function Header({
         {/* Separator before window controls */}
         <div className="h-4 w-px bg-[var(--border-default)] mx-1 no-drag" />
 
-        {/* Window Controls (Minimize, Maximize, Fullscreen, Close) */}
+        {/* Window Controls (Minimize, Fullscreen, Close) */}
         <div className="flex items-center gap-0.5 no-drag">
           <button
             onClick={handleMinimize}
@@ -395,15 +384,6 @@ export default function Header({
             aria-label="Minimize Window"
           >
             <Minus size={14} />
-          </button>
-
-          <button
-            onClick={handleMaximize}
-            className="btn btn-ghost btn-sm p-1.5 text-[var(--fg-muted)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-hover)] rounded-md no-drag"
-            title="Maximize / Restore"
-            aria-label="Maximize Window"
-          >
-            <Square size={12} />
           </button>
 
           <button

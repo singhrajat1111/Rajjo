@@ -310,6 +310,21 @@ function createWindow() {
     mainWindow.loadFile(prodIndex);
   }
 
+  // Security hardening: Lock navigation and new window creation
+  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+    const parsed = new URL(navigationUrl);
+    const isAllowed = (parsed.origin === 'http://localhost:5173' || parsed.origin === 'http://127.0.0.1:5173' || parsed.protocol === 'file:');
+    if (!isAllowed) {
+      event.preventDefault();
+      log('warn', `Blocked navigation to untrusted URL: ${navigationUrl}`);
+    }
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    log('warn', `Blocked window.open to URL: ${url}`);
+    return { action: 'deny' };
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });

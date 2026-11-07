@@ -4,6 +4,7 @@ langgraph>=0.2.0,<1.0.0
 langchain>=0.3.0,<1.0.0
 langchain-core>=0.3.0,<1.0.0
 langchain-openai>=0.2.0,<1.0.0
+langchain-anthropic>=0.3.0,<1.0.0
 langchain-community>=0.3.0,<1.0.0
 pydantic>=2.8.0,<3.0.0
 python-dotenv>=1.0.0,<2.0.0
@@ -15,8 +16,9 @@ aiofiles>=24.1.0
 keyring>=24.0.0
 pytest>=8.0.0
 
-# Direct GGUF acceleration:
-# On Windows x86_64, use precompiled binary wheel (avoids requiring MSVC C++ Build Tools).
-# On Linux and macOS, install from PyPI.
-llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.35/llama_cpp_python-0.3.35-py3-none-win_amd64.whl ; sys_platform == "win32" and platform_machine == "AMD64"
-llama-cpp-python>=0.3.0 ; sys_platform != "win32"
+# Optional: Direct GGUF acceleration
+# Install llama-cpp-python as an optional extra; do NOT hard-pin to a platform wheel.
+# On Windows x86_64, a precompiled wheel avoids requiring MSVC C++ Build Tools.
+# On Linux and macOS, install from PyPI source.
+# llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.35/llama_cpp_python-0.3.35-py3-none-win_amd64.whl ; sys_platform == "win32" and platform_machine == "AMD64"
+# llama-cpp-python>=0.3.0 ; sys_platform != "win32"

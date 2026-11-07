@@ -33,6 +33,8 @@ export default function SettingsPanel() {
     settingsData,
     fetchSettings,
     updateSettings,
+    theme: storeTheme,
+    setTheme,
   } = useStore();
 
   const [openaiKey, setOpenaiKey] = useState('');
@@ -53,7 +55,7 @@ export default function SettingsPanel() {
   const [httpsProxy, setHttpsProxy] = useState('');
   const [noProxy, setNoProxy] = useState('localhost,127.0.0.1,.local');
 
-  const [theme, setThemeState] = useState('dark');
+  const [theme, setThemeState] = useState(storeTheme || 'dark');
   const [showOpenaiKey, setShowOpenaiKey] = useState(false);
   const [showGroqKey, setShowGroqKey] = useState(false);
   const [showAnthropicKey, setShowAnthropicKey] = useState(false);
@@ -67,6 +69,12 @@ export default function SettingsPanel() {
   useEffect(() => {
     fetchSettings();
   }, [fetchSettings]);
+
+  useEffect(() => {
+    if (storeTheme) {
+      setThemeState(storeTheme);
+    }
+  }, [storeTheme]);
 
   useEffect(() => {
     if (settingsData?.settings) {
@@ -398,11 +406,14 @@ export default function SettingsPanel() {
                   {['dark', 'light', 'system'].map(t => (
                     <button
                       key={t}
-                      onClick={() => setThemeState(t)}
+                      onClick={() => {
+                        setThemeState(t);
+                        setTheme(t);
+                      }}
                       className={cn(
                         'p-4 rounded-xl border-2 transition-all',
                         theme === t
-                          ? 'border-[var(--brand-500)] bg-cyan-500/5 shadow-[var(--glow-brand)]'
+                          ? 'border-[var(--brand-500)] bg-cyan-500/10 shadow-[var(--glow-brand)]'
                           : 'border-[var(--border-default)] hover:border-[var(--border-emphasized)]'
                       )}
                     >

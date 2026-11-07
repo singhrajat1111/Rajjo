@@ -329,14 +329,12 @@ PROVIDER_CONFIGS = {
     },
     "anthropic": {
         "name": "Anthropic",
-        "default_model": "claude-3-7-sonnet",
+        "default_model": "claude-3-5-sonnet-20241022",
         "models": [
-            "claude-3-7-sonnet",
-            "claude-3-5-sonnet-latest",
-            "claude-3-5-haiku-latest",
             "claude-3-5-sonnet-20241022",
             "claude-3-5-haiku-20241022",
             "claude-3-opus-20240229",
+            "claude-3-7-sonnet-20250219",
         ],
         "base_url": "https://api.anthropic.com/v1",
         "key_env": "ANTHROPIC_API_KEY",

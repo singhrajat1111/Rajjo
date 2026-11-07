@@ -10,21 +10,87 @@
   color-scheme: dark;
 }
 
-[data-theme="light"] {
+[data-theme="light"],
+:root.light,
+.light {
   color-scheme: light;
-  --bg-deepest: oklch(0.985 0 0);
-  --bg-deep: oklch(0.97 0 0);
-  --bg-elevated: oklch(1 0 0);
-  --bg-hover: oklch(0.95 0 0);
-  --bg-active: oklch(0.92 0 0);
-  --bg-input: oklch(0.96 0 0);
-  --fg-primary: oklch(0.15 0 0);
-  --fg-secondary: oklch(0.35 0 0);
-  --fg-muted: oklch(0.5 0 0);
-  --fg-placeholder: oklch(0.6 0 0);
-  --border-subtle: oklch(0.88 0 0);
-  --border-default: oklch(0.82 0 0);
-  --border-emphasized: oklch(0.75 0 0);
+
+  /* Core Neutrals - Light Theme Canvas */
+  --bg-deepest: oklch(0.985 0.003 240);    /* #fafafb - Main app canvas */
+  --bg-deep: oklch(0.965 0.005 240);       /* #f3f4f6 - Sidebars, header, panels */
+  --bg-elevated: oklch(1 0 0);            /* #ffffff - Cards, modals, dropdowns */
+  --bg-hover: oklch(0.935 0.008 240);      /* #eceef3 - Hover states */
+  --bg-active: oklch(0.90 0.01 240);       /* #e2e4ea - Active/pressed */
+  --bg-input: oklch(0.975 0.003 240);      /* #f8f8fa - Inputs and inner fields */
+
+  /* Text & Foreground - High contrast, readable, crisp */
+  --fg-primary: oklch(0.18 0.015 250);     /* #14161d - Primary text */
+  --fg-secondary: oklch(0.38 0.02 250);    /* #474b57 - Secondary text */
+  --fg-muted: oklch(0.55 0.015 250);       /* #747885 - Muted/helper text */
+  --fg-placeholder: oklch(0.68 0.01 250);  /* #9fa3af - Placeholder text */
+
+  /* Borders */
+  --border-subtle: oklch(0.92 0.005 240);  /* #e7e8ec - Subtle dividers */
+  --border-default: oklch(0.86 0.008 240); /* #d4d6dc - Standard borders */
+  --border-emphasized: oklch(0.76 0.012 240); /* #b8bac2 - Emphasized/hover borders */
+
+  /* Brand - Deep rich teal/cyan calibrated for high readability on light surfaces */
+  --brand-50: oklch(0.97 0.02 195);
+  --brand-100: oklch(0.93 0.04 195);
+  --brand-200: oklch(0.86 0.07 195);
+  --brand-300: oklch(0.48 0.12 195);
+  --brand-400: oklch(0.42 0.14 195);
+  --brand-500: oklch(0.38 0.155 195);      /* Primary brand */
+  --brand-600: oklch(0.33 0.145 195);
+  --brand-700: oklch(0.28 0.125 195);
+  --brand-800: oklch(0.22 0.095 195);
+  --brand-900: oklch(0.18 0.065 195);
+
+  /* Accent - Warm Amber tuned for light mode */
+  --accent-50: oklch(0.97 0.02 85);
+  --accent-100: oklch(0.92 0.05 85);
+  --accent-200: oklch(0.84 0.08 85);
+  --accent-300: oklch(0.55 0.13 85);
+  --accent-400: oklch(0.48 0.15 85);
+  --accent-500: oklch(0.44 0.16 85);       /* Primary accent */
+  --accent-600: oklch(0.38 0.14 85);
+  --accent-700: oklch(0.32 0.12 85);
+  --accent-800: oklch(0.25 0.09 85);
+  --accent-900: oklch(0.19 0.06 85);
+
+  /* Semantic Colors for Light Theme */
+  --success: oklch(0.44 0.15 145);
+  --success-bg: oklch(0.96 0.035 145);
+  --success-border: oklch(0.84 0.08 145);
+
+  --warning: oklch(0.50 0.16 85);
+  --warning-bg: oklch(0.96 0.04 85);
+  --warning-border: oklch(0.86 0.09 85);
+
+  --danger: oklch(0.50 0.19 25);
+  --danger-bg: oklch(0.96 0.035 25);
+  --danger-border: oklch(0.86 0.08 25);
+
+  --info: oklch(0.44 0.16 250);
+  --info-bg: oklch(0.96 0.035 250);
+  --info-border: oklch(0.86 0.08 250);
+
+  /* Soft, elevated natural shadows */
+  --shadow-sm: 0 1px 2px 0 oklch(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px oklch(0 0 0 / 0.07), 0 2px 4px -2px oklch(0 0 0 / 0.05);
+  --shadow-lg: 0 10px 15px -3px oklch(0 0 0 / 0.08), 0 4px 6px -4px oklch(0 0 0 / 0.04);
+  --shadow-xl: 0 20px 25px -5px oklch(0 0 0 / 0.09), 0 8px 10px -6px oklch(0 0 0 / 0.04);
+  --shadow-inner: inset 0 2px 4px 0 oklch(0 0 0 / 0.05);
+
+  /* Glow shadows */
+  --glow-brand: 0 0 0 2px color-mix(in oklch, var(--brand-500) 25%, transparent), 0 4px 16px -2px color-mix(in oklch, var(--brand-500) 25%, transparent);
+  --glow-accent: 0 0 0 2px color-mix(in oklch, var(--accent-500) 25%, transparent), 0 4px 16px -2px color-mix(in oklch, var(--accent-500) 25%, transparent);
+  --glow-success: 0 0 0 2px color-mix(in oklch, var(--success) 25%, transparent), 0 4px 16px -2px color-mix(in oklch, var(--success) 25%, transparent);
+  --glow-danger: 0 0 0 2px color-mix(in oklch, var(--danger) 25%, transparent), 0 4px 16px -2px color-mix(in oklch, var(--danger) 25%, transparent);
+
+  /* Scrollbar */
+  --scrollbar-thumb: oklch(0.82 0.008 240);
+  --scrollbar-thumb-hover: oklch(0.72 0.012 240);
 }
 
 /* Global styles */
