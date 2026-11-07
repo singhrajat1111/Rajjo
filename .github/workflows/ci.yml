@@ -29,14 +29,14 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r backend/requirements.txt || python -m pip install fastapi uvicorn langgraph langchain langchain-openai langchain-community pydantic python-dotenv duckduckgo-search chromadb httpx aiofiles keyring pytest
+          python -m pip install -r backend/requirements.txt || python -m pip install fastapi uvicorn langgraph langchain langchain-core langchain-openai langchain-anthropic langchain-community pydantic python-dotenv duckduckgo-search playwright chromadb httpx aiofiles keyring pytest
 
       - name: Run Pytest Test Suite
         run: |
           python -m pytest tests/ -v
 
   frontend-build:
-    name: Frontend Build & Type Check
+    name: Frontend Build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code

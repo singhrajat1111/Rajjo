@@ -69,14 +69,20 @@ class ApprovalManager:
             if self.is_destructive_shell_command(cmd):
                 return True
 
+        # File deletion is always gated
         if tool_name in ("delete_file", "remove_directory"):
             return True
 
-        if tool_name == "write_file":
-            # If writing over an existing sensitive or root file
-            path = str(tool_args.get("path", "")).lower()
-            if any(p in path for p in [".env", "main.py", "config.py", ".json", ".spec"]):
+        # Gate all write operations by default (except explicit scratch directory if designated)
+        if tool_name in ("write_file", "copy_file"):
+            path = str(tool_args.get("path") or tool_args.get("destination", "")).lower()
+            # Scratch paths can optionally be bypassed, but outside scratch/ requires approval
+            if "scratch" not in path:
                 return True
+
+        # MCP tools and any external network dispatch tools are gated
+        if tool_name.startswith("mcp_") or "send" in tool_name or "dispatch" in tool_name:
+            return True
 
         return False
 
@@ -177,17 +183,26 @@ class ApprovalManager:
             item = self._pending[approval_id]
             item.approved = approved
             # Wake up both async and sync waiters
-            item.sync_event.set()
+            if hasattr(item, "sync_event") and item.sync_event:
+                item.sync_event.set()
+            if hasattr(item, "event") and item.event:
+                item.event.set()
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
+                loop = asyncio.get_running_loop()
+                if loop and loop.is_running() and hasattr(item, "async_event"):
                     loop.call_soon_threadsafe(item.async_event.set)
-                else:
-                    item.async_event.set()
             except RuntimeError:
-                pass
+                if hasattr(item, "async_event") and item.async_event:
+                    item.async_event.set()
             return True
         return False
+
+    def clear_all_pending(self, approved: bool = False):
+        """Rejects and clears all pending approvals immediately (used on abort/disconnect)."""
+        pending_ids = list(self._pending.keys())
+        for aid in pending_ids:
+            self.resolve_approval(aid, approved)
+        self._pending.clear()
 
     def list_pending(self) -> list:
         return [

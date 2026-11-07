@@ -69,6 +69,8 @@ class Test20TaskEvaluationSuite:
         appr_id = "test-grant-8"
         approval_manager._pending[appr_id] = type("Obj", (), {
             "approved": None,
+            "async_event": type("Ev", (), {"set": lambda self: None})(),
+            "sync_event": type("Ev", (), {"set": lambda self: None})(),
             "event": type("Ev", (), {"set": lambda self: None})()
         })()
         ok = approval_manager.resolve_approval(appr_id, True)
@@ -82,6 +84,8 @@ class Test20TaskEvaluationSuite:
         appr_id = "test-deny-9"
         approval_manager._pending[appr_id] = type("Obj", (), {
             "approved": None,
+            "async_event": type("Ev", (), {"set": lambda self: None})(),
+            "sync_event": type("Ev", (), {"set": lambda self: None})(),
             "event": type("Ev", (), {"set": lambda self: None})()
         })()
         ok = approval_manager.resolve_approval(appr_id, False)

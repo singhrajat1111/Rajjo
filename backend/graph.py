@@ -108,11 +108,13 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     activity = list(state.get("activity_log", []))
 
     if iteration > max_iter:
-        activity.append({"type": "status", "message": "Reached maximum iteration limit. Finalizing response."})
+        msg = f"Task stopped: reached maximum allowed execution limit ({max_iter} iterations)."
+        activity.append({"type": "status", "message": msg})
         return {
-            "messages": [AIMessage(content="I have reached the maximum allowed execution steps for this task. Here is the current progress and outcome.")],
+            "messages": [AIMessage(content=msg)],
             "next_step": "reflect",
             "task_status": "max_iterations_reached",
+            "final_output": msg,
             "iteration_count": iteration,
             "activity_log": activity
         }
@@ -158,7 +160,13 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         f"{memory_instruction}"
     )
 
-    full_messages = [SystemMessage(content=system_prompt)] + list(state["messages"])
+    # Trim older history if message list grows too long to keep context bounded
+    history_messages = list(state["messages"])
+    if len(history_messages) > 30:
+        # Keep initial user message and most recent 24 messages
+        history_messages = [history_messages[0]] + history_messages[-24:]
+
+    full_messages = [SystemMessage(content=system_prompt)] + history_messages
 
     try:
         response = llm_bound.invoke(full_messages)
@@ -256,6 +264,10 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             try:
                 res = target_tool.invoke(tool_args)
                 tool_result_str = str(res)
+                # Hard limit tool outputs to prevent context window explosion (50KB cap)
+                MAX_TOOL_OUTPUT = 51_200
+                if len(tool_result_str) > MAX_TOOL_OUTPUT:
+                    tool_result_str = tool_result_str[:MAX_TOOL_OUTPUT] + "\n...[Output truncated due to context size cap]..."
                 is_success = True
                 try:
                     parsed = json.loads(tool_result_str)

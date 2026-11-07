@@ -3,6 +3,7 @@ import sys
 import json
 import subprocess
 import threading
+import queue
 import time
 from typing import Dict, Any, List, Optional, Set
 from langchain_core.tools import tool, StructuredTool
@@ -33,6 +34,28 @@ class MCPClientConnection:
         self.tools: List[Dict[str, Any]] = []
         self.connected = False
         self.error_message = ""
+        self._line_queue: queue.Queue = queue.Queue()
+        self._reader_running = False
+
+    def _reader_thread(self):
+        while self._reader_running and self.process and self.process.stdout:
+            try:
+                line = self.process.stdout.readline()
+                if not line:
+                    break
+                self._line_queue.put(line)
+            except Exception:
+                break
+
+    def _drain_stderr_thread(self):
+        while self._reader_running and self.process and self.process.stderr:
+            try:
+                line = self.process.stderr.readline()
+                if not line:
+                    break
+                # Drain stderr to avoid pipe deadlock
+            except Exception:
+                break
 
     def connect(self) -> bool:
         with self._lock:
@@ -57,6 +80,10 @@ class MCPClientConnection:
                     env=full_env,
                     shell=(sys.platform == "win32")
                 )
+
+                self._reader_running = True
+                threading.Thread(target=self._reader_thread, daemon=True).start()
+                threading.Thread(target=self._drain_stderr_thread, daemon=True).start()
 
                 # Send initialize request
                 init_res = self._send_request("initialize", {
@@ -87,6 +114,7 @@ class MCPClientConnection:
 
     def disconnect(self):
         with self._lock:
+            self._reader_running = False
             if self.process:
                 try:
                     self.process.terminate()
@@ -100,35 +128,37 @@ class MCPClientConnection:
             self.connected = False
 
     def _send_request(self, method: str, params: Dict[str, Any], timeout: float = 10.0) -> Optional[Dict[str, Any]]:
-        if not self.process or self.process.poll() is not None:
-            return None
-        self._req_id += 1
-        req = {
-            "jsonrpc": "2.0",
-            "id": self._req_id,
-            "method": method,
-            "params": params
-        }
-        req_line = json.dumps(req) + "\n"
-        try:
-            self.process.stdin.write(req_line)
-            self.process.stdin.flush()
-            start = time.time()
-            while time.time() - start < timeout:
-                line = self.process.stdout.readline()
-                if line:
-                    line = line.strip()
-                    if line:
-                        try:
-                            data = json.loads(line)
-                            if data.get("id") == self._req_id:
+        with self._lock:
+            if not self.process or self.process.poll() is not None:
+                return None
+            self._req_id += 1
+            req_id = self._req_id
+            req = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "method": method,
+                "params": params
+            }
+            req_line = json.dumps(req) + "\n"
+            try:
+                self.process.stdin.write(req_line)
+                self.process.stdin.flush()
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    remaining = max(0.01, deadline - time.time())
+                    try:
+                        line = self._line_queue.get(timeout=min(0.2, remaining))
+                        if line:
+                            data = json.loads(line.strip())
+                            if data.get("id") == req_id:
                                 return data
-                        except Exception:
-                            continue
-                time.sleep(0.05)
-        except Exception as e:
-            print(f"[MCPClient:{self.name}] Request error ({method}): {e}")
-        return None
+                    except queue.Empty:
+                        continue
+                    except Exception:
+                        continue
+            except Exception as e:
+                print(f"[MCPClient:{self.name}] Request error ({method}): {e}")
+            return None
 
     def _send_notification(self, method: str, params: Dict[str, Any]):
         if not self.process or self.process.poll() is not None:

@@ -142,8 +142,9 @@ def get_sanitized_environment() -> Dict[str, str]:
 @tool
 def run_shell_command(command: str, timeout: Optional[int] = None) -> str:
     """
-    Executes a shell command strictly inside the workspace boundary with sanitized environment.
-    Supports approval gating for destructive actions and killable process tree management.
+    Executes a shell command with the active workspace as current working directory (cwd)
+    and a sanitized environment. Commands are monitored by process tree tracking and
+    approval gating is centrally managed.
     Args:
         command: The shell command line to run.
         timeout: Execution timeout in seconds (optional, defaults to configured setting).
@@ -152,60 +153,10 @@ def run_shell_command(command: str, timeout: Optional[int] = None) -> str:
     configured_timeout = timeout or settings.get("shell_timeout", 30)
     workspace_root = get_workspace_dir().resolve()
 
-    # 1. Analyze safety policy
-    risk_violation = analyze_command_risk(command)
-    requires_approval = (
-        bool(risk_violation)
-        or settings.get("shell_confirm_destructive", True)
-        or approval_manager.is_destructive_shell_command(command)
-    )
+    # Approval gating is enforced centrally at the graph level (tool_executor_node)
+    # via approval_manager.requires_approval(), ensuring single prompt consistency.
 
-    # 2. Enforce Approval Gate if required
-    # The tool runs in a worker thread (LangGraph executes sync tools via
-    # run_in_executor). Calling asyncio.run() from a thread that already has a
-    # running loop raises RuntimeError; run_coroutine_threadsafe across two
-    # different loops is unreliable. We solve this cleanly with a threading.Event
-    # and the main-loop approval manager that uses its own asyncio.Event internally.
-    if requires_approval:
-        try:
-            desc = f"Shell command execution requested: '{command}'"
-            if risk_violation:
-                desc += f" [Security Warning: {risk_violation}]"
-
-            approved = approval_manager.request_approval_sync(
-                tool_name="run_shell_command",
-                tool_args={"command": command},
-                description=desc,
-                risk_level="high" if risk_violation else "normal",
-                timeout_seconds=120,
-            )
-
-            if not approved:
-                return json.dumps({
-                    "success": False,
-                    "tool": "run_shell_command",
-                    "data": None,
-                    "error": {
-                        "code": "USER_REJECTED",
-                        "message": f"Execution was denied or timed out by the user approval gate: {command}"
-                    },
-                    "metadata": {"command": command}
-                }, indent=2)
-
-        except Exception as e:
-            # If approval cannot be completed, block execution for safety
-            return json.dumps({
-                "success": False,
-                "tool": "run_shell_command",
-                "data": None,
-                "error": {
-                    "code": "APPROVAL_GATE_ERROR",
-                    "message": f"Approval check failed: {str(e)}"
-                },
-                "metadata": {"command": command}
-            }, indent=2)
-
-    # 3. Execute with tracked process tree
+    # 2. Execute with tracked process tree
     # POSIX: start_new_session=True puts the child in its own process group so
     # kill_process_tree(pgid) cannot accidentally kill the backend itself.
     # Windows: CREATE_NEW_PROCESS_GROUP achieves the same isolation.

@@ -174,9 +174,24 @@ class SemanticMemory:
         """
         Retrieve relevant memories. By default only approved memories are returned,
         preventing unverified or injected web facts from polluting the prompt.
+        Attempts ChromaDB query first when available, falling back to local cosine ranking.
         """
         if not query.strip():
             return []
+
+        if self._use_chroma:
+            try:
+                where_filter = {"approved": True} if only_approved else None
+                chroma_res = self.collection.query(
+                    query_texts=[query],
+                    n_results=n_results,
+                    where=where_filter
+                )
+                docs = chroma_res.get("documents", [[]])[0]
+                if docs:
+                    return docs
+            except Exception as e:
+                print(f"[SemanticMemory] Chroma query fallback notice: {e}")
 
         all_mems = self.get_all_memories()
         if only_approved:

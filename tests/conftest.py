@@ -6,7 +6,13 @@ run offline without a real API key.
 """
 import os
 import sys
+import tempfile
 from pathlib import Path
+
+# Ensure test run uses an isolated temporary RAJJO_DATA_DIR by default
+if "RAJJO_DATA_DIR" not in os.environ:
+    _test_data_dir = tempfile.mkdtemp(prefix="rajjo_test_data_")
+    os.environ["RAJJO_DATA_DIR"] = _test_data_dir
 
 # Ensure imports resolve from the repo root
 root_dir = Path(__file__).resolve().parent.parent

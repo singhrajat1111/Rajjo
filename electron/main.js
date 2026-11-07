@@ -77,7 +77,8 @@ function getOrCreateApiToken() {
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
-    fs.writeFileSync(tokenFile, generated, { encoding: 'utf-8' });
+    // Restrict permissions on session token
+    fs.writeFileSync(tokenFile, generated, { encoding: 'utf-8', mode: 0o600 });
   } catch (e) {
     log('error', 'Error writing new session token', e);
   }
@@ -99,14 +100,19 @@ function isPortAvailable(port) {
   });
 }
 
-async function findAvailablePort(startPort = 8000, maxAttempts = 50) {
+function getRandomPort(min = 10000, max = 60000) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+async function findAvailablePort(startPort = null, maxAttempts = 50) {
+  const initialPort = startPort || getRandomPort();
   for (let i = 0; i < maxAttempts; i++) {
-    const p = startPort + i;
+    const p = initialPort + i;
     if (await isPortAvailable(p)) {
       return p;
     }
   }
-  return startPort;
+  return initialPort;
 }
 
 // ----------------- Backend Process Lifecycle -----------------

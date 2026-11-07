@@ -192,6 +192,8 @@ async def resolve_approval(req: ApprovalResolutionRequest):
 async def abort_chat():
     global _abort_requested
     _abort_requested = True
+    # Immediately reject and clear any pending approvals so worker threads unblock
+    approval_manager.clear_all_pending(approved=False)
     # Kill all running child process trees (e.g. bash, powershell, python, curl)
     process_manager.kill_all()
     # Cancel any active running chat coroutines
@@ -309,6 +311,8 @@ async def agent_event_stream(request: ChatRequest):
                     if has_tc:
                         # Discard the content we just streamed — it's pre-tool chatter
                         collected_content = ""
+                        # Signal client to clear live streamed token draft before executing tool
+                        yield f"data: {json.dumps({'type': 'token_reset'})}\n\n"
                     _current_node_has_tool_calls = has_tc
 
             # 2. Instant Tool Start (arrives immediately when tool starts)
@@ -363,11 +367,20 @@ async def agent_event_stream(request: ChatRequest):
 
             await asyncio.sleep(0.005)
 
+        # Determine final status and message
         # Prefer final_output set by planner_node over streamed tokens
-        # (streamed tokens are only kept for display; final_output is authoritative)
-        final_msg = collected_content.strip() or "Task completed."
+        final_status = "completed"
+        if not collected_content.strip():
+            final_msg = "Task completed."
+        else:
+            final_msg = collected_content.strip()
+
+        # If planner stopped at max iterations, reflect that explicitly
+        if "maximum allowed execution limit" in final_msg or "stopped at max iterations" in final_msg.lower():
+            final_status = "max_iterations_reached"
+
         yield f"data: {json.dumps({'type': 'final', 'role': 'agent', 'content': final_msg, 'thread_id': thread_id})}\n\n"
-        yield f"data: {json.dumps({'type': 'done', 'status': 'completed'})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'status': final_status})}\n\n"
 
         # Persist conversation to thread store if auto_save is enabled
         if settings.get("auto_save_conversations", True):
@@ -390,6 +403,8 @@ async def agent_event_stream(request: ChatRequest):
                 print(f"[Main] Error auto-saving error thread: {persist_err}")
     finally:
         approval_manager.remove_event_callback(push_approval_event)
+        # Clear any dangling pending approvals for this stream
+        approval_manager.clear_all_pending(approved=False)
         _active_chat_tasks.pop(thread_id, None)
 
 @app.post("/chat")
@@ -662,7 +677,8 @@ async def list_mcp_servers():
 
 @app.post("/mcp/servers")
 async def add_mcp_server(req: MCPServerRequest):
-    saved_cfg = mcp_manager.add_server(req.dict())
+    # Run blocking connection in background thread pool to avoid blocking event loop
+    saved_cfg = await asyncio.to_thread(mcp_manager.add_server, req.dict())
     return {"success": True, "server": saved_cfg}
 
 @app.delete("/mcp/servers/{name}")
