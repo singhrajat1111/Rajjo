@@ -247,7 +247,9 @@ async def agent_event_stream(request: ChatRequest):
         "iteration_count": 0,
         "max_iterations": max_iterations,
         "activity_log": [],
-        "final_output": ""
+        "final_output": "",
+        "thread_id": thread_id,
+        "has_untrusted_content": False
     }
 
     # Set recursion_limit high enough that the graceful max_iterations path is reachable.
@@ -272,6 +274,8 @@ async def agent_event_stream(request: ChatRequest):
     collected_content = ""
     _current_node_has_tool_calls = False
     activities_recorded = []
+    last_final_output = ""
+    last_task_status = "completed"
 
     try:
         # astream_events version="v2" gives us per-node metadata
@@ -348,35 +352,48 @@ async def agent_event_stream(request: ChatRequest):
                 activities_recorded.append(act)
                 yield f"data: {json.dumps(act)}\n\n"
 
-            # 4. Plan Node or Chain Events
-            elif ev_type == "on_chain_end" and event.get("name") == "plan":
-                output = data.get("output", {})
-                steps = output.get("plan_steps", [])
-                if steps:
-                    act = {"type": "plan", "steps": steps, "message": "Task plan formulated."}
-                    activities_recorded.append(act)
-                    yield f"data: {json.dumps(act)}\n\n"
+            # 4. Chain End Events (captures node outputs including final_output and task_status)
+            elif ev_type == "on_chain_end":
+                node_name = event.get("name", "")
+                output = data.get("output")
+                if isinstance(output, dict):
+                    if output.get("final_output"):
+                        last_final_output = str(output["final_output"])
+                    if output.get("task_status"):
+                        last_task_status = str(output["task_status"])
 
-            elif ev_type == "on_chain_end" and event.get("name") == "reflector":
-                output = data.get("output", {})
-                lesson = output.get("scratchpad")
-                if lesson:
-                    act = {"type": "reflection", "message": f"Learned: {lesson}"}
-                    activities_recorded.append(act)
-                    yield f"data: {json.dumps(act)}\n\n"
+                if node_name == "plan":
+                    steps = output.get("plan_steps", []) if isinstance(output, dict) else []
+                    if steps:
+                        act = {"type": "plan", "steps": steps, "message": "Task plan formulated."}
+                        activities_recorded.append(act)
+                        yield f"data: {json.dumps(act)}\n\n"
+
+                elif node_name == "reflector":
+                    lesson = output.get("scratchpad") if isinstance(output, dict) else ""
+                    if lesson:
+                        act = {"type": "reflection", "message": f"Learned: {lesson}"}
+                        activities_recorded.append(act)
+                        yield f"data: {json.dumps(act)}\n\n"
 
             await asyncio.sleep(0.005)
 
         # Determine final status and message
-        # Prefer final_output set by planner_node over streamed tokens
-        final_status = "completed"
-        if not collected_content.strip():
-            final_msg = "Task completed."
-        else:
+        # Read final_output and task_status from graph's final state/node outputs
+        final_status = last_task_status
+        if last_final_output and last_final_output.strip():
+            final_msg = last_final_output.strip()
+        elif collected_content.strip():
             final_msg = collected_content.strip()
+        else:
+            final_msg = "Task completed."
 
         # If planner stopped at max iterations, reflect that explicitly
-        if "maximum allowed execution limit" in final_msg or "stopped at max iterations" in final_msg.lower():
+        if (
+            final_status == "max_iterations_reached"
+            or "maximum allowed execution limit" in final_msg
+            or "stopped at max iterations" in final_msg.lower()
+        ):
             final_status = "max_iterations_reached"
 
         yield f"data: {json.dumps({'type': 'final', 'role': 'agent', 'content': final_msg, 'thread_id': thread_id})}\n\n"
@@ -403,8 +420,8 @@ async def agent_event_stream(request: ChatRequest):
                 print(f"[Main] Error auto-saving error thread: {persist_err}")
     finally:
         approval_manager.remove_event_callback(push_approval_event)
-        # Clear any dangling pending approvals for this stream
-        approval_manager.clear_all_pending(approved=False)
+        # Clear any dangling pending approvals for this specific thread
+        approval_manager.clear_all_pending(approved=False, thread_id=thread_id)
         _active_chat_tasks.pop(thread_id, None)
 
 @app.post("/chat")

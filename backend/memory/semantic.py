@@ -70,8 +70,36 @@ class SemanticMemory:
                 embedding_function=self.embedder
             )
             self._use_chroma = True
+            # Re-index existing memories into Chroma with deterministic embeddings
+            self._sync_and_reindex_chroma()
         except Exception as e:
             print(f"[SemanticMemory] ChromaDB notice ({e}). Operating with local persistent JSON store.")
+
+    def _sync_and_reindex_chroma(self):
+        """Syncs all memories from fallback JSON store into Chroma to ensure consistent embeddings."""
+        if not self._use_chroma:
+            return
+        try:
+            stored = self._read_fallback()
+            if not stored:
+                return
+            existing_ids = set(self.collection.get().get("ids", []))
+            to_add_docs, to_add_metas, to_add_ids = [], [], []
+            for item in stored:
+                mid = item.get("id")
+                if mid and mid not in existing_ids:
+                    to_add_docs.append(item.get("document", ""))
+                    to_add_metas.append(item.get("metadata", {}))
+                    to_add_ids.append(mid)
+            if to_add_ids:
+                self.collection.add(
+                    documents=to_add_docs,
+                    metadatas=to_add_metas,
+                    ids=to_add_ids
+                )
+                print(f"[SemanticMemory] Re-indexed {len(to_add_ids)} memories into ChromaDB.")
+        except Exception as e:
+            print(f"[SemanticMemory] Chroma re-indexing notice: {e}")
 
     def _init_fallback(self):
         if not self._fallback_path.exists():
@@ -193,6 +221,8 @@ class SemanticMemory:
             except Exception as e:
                 print(f"[SemanticMemory] Chroma query fallback notice: {e}")
 
+        # Local JSON path fallback
+        print("[SemanticMemory] Searching memories via local JSON persistent store.")
         all_mems = self.get_all_memories()
         if only_approved:
             candidates = [m for m in all_mems if m.get("metadata", {}).get("approved") is True]

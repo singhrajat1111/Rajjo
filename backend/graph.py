@@ -23,7 +23,7 @@ except ImportError:
     from security.approval import approval_manager
 
 # 1. State Definition
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     messages: Annotated[List[BaseMessage], add_messages]
     plan_steps: List[Dict[str, Any]]
     plan_summary: str
@@ -36,6 +36,8 @@ class AgentState(TypedDict):
     max_iterations: int
     activity_log: List[Dict[str, Any]]
     final_output: str
+    thread_id: Optional[str]
+    has_untrusted_content: Optional[bool]
 
 # 2. Nodes Implementation
 
@@ -101,6 +103,34 @@ def plan_node(state: AgentState) -> Dict[str, Any]:
         "activity_log": activity
     }
 
+def trim_history_safely(messages: list, max_recent: int = 24) -> list:
+    """
+    Trim conversation history keeping the initial message and a bounded tail,
+    ensuring ToolMessages are never orphaned from their parent AIMessage.
+    """
+    if len(messages) <= max_recent + 1:
+        return list(messages)
+
+    initial_msg = messages[0]
+    start_idx = len(messages) - max_recent
+
+    # Step backward so we don't slice in the middle of a tool call / response turn
+    while start_idx > 1 and (
+        isinstance(messages[start_idx], ToolMessage) or
+        getattr(messages[start_idx], "type", "") == "tool"
+    ):
+        start_idx -= 1
+
+    # If start_idx is still a ToolMessage (edge case where parent AIMessage was lost),
+    # step forward to next non-tool message
+    while start_idx < len(messages) and (
+        isinstance(messages[start_idx], ToolMessage) or
+        getattr(messages[start_idx], "type", "") == "tool"
+    ):
+        start_idx += 1
+
+    return [initial_msg] + list(messages[start_idx:])
+
 def planner_node(state: AgentState) -> Dict[str, Any]:
     """Decide next action, bind tools, and generate response or tool calls."""
     iteration = state.get("iteration_count", 0) + 1
@@ -160,11 +190,10 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         f"{memory_instruction}"
     )
 
-    # Trim older history if message list grows too long to keep context bounded
+    # Trim older history safely so ToolMessages are never orphaned from parent AIMessages
     history_messages = list(state["messages"])
     if len(history_messages) > 30:
-        # Keep initial user message and most recent 24 messages
-        history_messages = [history_messages[0]] + history_messages[-24:]
+        history_messages = trim_history_safely(history_messages, max_recent=24)
 
     full_messages = [SystemMessage(content=system_prompt)] + history_messages
 
@@ -212,6 +241,18 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     last_message = state["messages"][-1]
     activity = list(state.get("activity_log", []))
     tool_outputs = []
+    thread_id = state.get("thread_id")
+
+    # Prompt-injection trust boundary:
+    # Check if untrusted external content (web page, MCP tool output, browser content) is in context
+    has_untrusted = bool(state.get("has_untrusted_content", False))
+    if not has_untrusted:
+        for m in state.get("messages", []):
+            if getattr(m, "type", "") == "tool":
+                tname = getattr(m, "name", "")
+                if tname in ("web_search", "fetch_webpage", "open_visible_browser", "browser_navigate") or tname.startswith("mcp_"):
+                    has_untrusted = True
+                    break
 
     try:
         from backend.config import load_settings as _load_settings
@@ -219,10 +260,15 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         from config import load_settings as _load_settings
     settings = _load_settings()
 
+    UNTRUSTED_TOOLS = {"web_search", "fetch_webpage", "open_visible_browser", "browser_navigate", "browser_click", "browser_type"}
+
     for tool_call in getattr(last_message, "tool_calls", []):
         tool_name = tool_call["name"]
         tool_args = tool_call.get("args", {})
         tool_id = tool_call.get("id", f"call_{int(time.time()*1000)}")
+
+        if tool_name in UNTRUSTED_TOOLS or tool_name.startswith("mcp_"):
+            has_untrusted = True
 
         activity_desc = f"Running tool '{tool_name}'..."
         if tool_name == "read_file":
@@ -239,15 +285,18 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         activity.append({"type": "tool_start", "tool": tool_name, "message": activity_desc, "args": tool_args})
 
         # Central approval gate: check ApprovalManager.requires_approval before every tool
-        needs_gate = approval_manager.requires_approval(tool_name, tool_args, settings)
+        needs_gate = approval_manager.requires_approval(tool_name, tool_args, settings, untrusted_context=has_untrusted)
         if needs_gate:
             desc = f"Tool '{tool_name}' requires approval before execution."
+            if has_untrusted:
+                desc += " (Untrusted external content is present in session context)"
             approved = approval_manager.request_approval_sync(
                 tool_name=tool_name,
                 tool_args=tool_args,
                 description=desc,
                 risk_level="high",
                 timeout_seconds=120,
+                thread_id=thread_id
             )
             if not approved:
                 denied_msg = json.dumps({
@@ -315,7 +364,8 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     return {
         "messages": tool_outputs,
         "next_step": "planner",
-        "activity_log": activity
+        "activity_log": activity,
+        "has_untrusted_content": has_untrusted
     }
 
 def reflection_node(state: AgentState) -> Dict[str, Any]:
@@ -397,6 +447,7 @@ def memory_writer_node(state: AgentState) -> Dict[str, Any]:
     activity.append({"type": "status", "message": "Task complete."})
     return {
         "task_status": status,
+        "final_output": state.get("final_output", ""),
         "activity_log": activity
     }
 

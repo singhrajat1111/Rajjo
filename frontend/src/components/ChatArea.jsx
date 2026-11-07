@@ -202,6 +202,7 @@ export default function ChatArea({
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
       let collectedText = '';
+      let doneStatus = 'completed';
 
       while (true) {
         const { value, done } = await reader.read();
@@ -222,6 +223,11 @@ export default function ChatArea({
                 collectedText += (data.content || '');
                 setLiveAgentMessage(collectedText);
                 if (setLiveStreamMsg) setLiveStreamMsg(collectedText);
+              } else if (data.type === 'token_reset') {
+                // Clear live token draft when agent decides to execute a tool
+                collectedText = '';
+                setLiveAgentMessage('');
+                if (setLiveStreamMsg) setLiveStreamMsg('');
               } else if (data.type === 'approval_required') {
                 setPendingApproval(data);
                 const act = {
@@ -247,6 +253,17 @@ export default function ChatArea({
                 setLiveAgentMessage(data.content);
                 if (setLiveStreamMsg) setLiveStreamMsg(data.content);
                 fetchThreads();
+              } else if (data.type === 'done') {
+                doneStatus = data.status || 'completed';
+                if (data.status === 'max_iterations_reached') {
+                  const act = {
+                    type: 'status',
+                    message: '⚠️ Execution stopped: Maximum iteration limit reached.'
+                  };
+                  activitiesRef.current = [...activitiesRef.current, act];
+                  setStreamActivities([...activitiesRef.current]);
+                  if (setVisibleActivities) setVisibleActivities([...activitiesRef.current]);
+                }
               } else if (data.type === 'error') {
                 activitiesRef.current = [...activitiesRef.current, { type: 'error', message: data.message }];
                 setStreamActivities([...activitiesRef.current]);
@@ -264,6 +281,7 @@ export default function ChatArea({
         role: 'agent',
         content: finalMsgContent,
         activities: [...activitiesRef.current],
+        status: doneStatus,
         timestamp: new Date().toISOString()
       });
     } catch (e) {
@@ -625,6 +643,11 @@ export default function ChatArea({
                       <div className="flex items-center gap-2 text-[var(--brand-400)]">
                         <CheckCircle2 size={12} className="text-[var(--success)]" />
                         <span>Execution Trace ({msg.activities.length} steps)</span>
+                        {msg.status === 'max_iterations_reached' && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono">
+                            Stopped at max iterations
+                          </span>
+                        )}
                       </div>
                       {expandedMessageSteps[i] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                     </button>

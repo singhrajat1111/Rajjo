@@ -2,7 +2,8 @@ import asyncio
 import threading
 import uuid
 import re
-from typing import Dict, Any, Optional, Callable
+from pathlib import Path
+from typing import Dict, Any, Optional, Callable, Set
 from dataclasses import dataclass, field
 
 @dataclass
@@ -12,6 +13,7 @@ class PendingApproval:
     tool_args: Dict[str, Any]
     description: str
     risk_level: str
+    thread_id: Optional[str] = None
     # asyncio.Event for async callers, threading.Event for sync/worker-thread callers
     async_event: asyncio.Event = field(default_factory=asyncio.Event)
     sync_event: threading.Event = field(default_factory=threading.Event)
@@ -22,7 +24,8 @@ class ApprovalManager:
     Coordinates human-in-the-loop approval gating for sensitive or destructive actions:
     - Destructive shell commands (rm, del, kill, shutdown, git push --force, format, etc.)
     - Any shell command when 'shell_confirm_destructive' setting is enabled
-    - File writes/overwrites outside temporary/scratch workspace paths
+    - Any shell, write, or external dispatch action once untrusted context is present
+    - File writes/overwrites outside workspace scratch/ directory
     - File deletions
     - Network dispatches / sends
     """
@@ -59,7 +62,25 @@ class ApprovalManager:
         ]
         return any(re.search(pat, cmd, re.IGNORECASE) for pat in patterns)
 
-    def requires_approval(self, tool_name: str, tool_args: Dict[str, Any], settings: Dict[str, Any]) -> bool:
+    def requires_approval(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        settings: Dict[str, Any],
+        untrusted_context: bool = False
+    ) -> bool:
+        # Prompt-injection trust boundary:
+        # If untrusted external content (web page, MCP output, browser DOM) is in context,
+        # require approval for all shell execution, filesystem mutations, and external network sends.
+        if untrusted_context:
+            if (
+                tool_name in ("run_shell_command", "write_file", "copy_file", "delete_file", "remove_directory")
+                or tool_name.startswith("mcp_")
+                or "send" in tool_name
+                or "dispatch" in tool_name
+            ):
+                return True
+
         confirm_destructive = settings.get("shell_confirm_destructive", True)
 
         if tool_name == "run_shell_command":
@@ -73,11 +94,29 @@ class ApprovalManager:
         if tool_name in ("delete_file", "remove_directory"):
             return True
 
-        # Gate all write operations by default (except explicit scratch directory if designated)
+        # Gate all write operations outside workspace/scratch/
         if tool_name in ("write_file", "copy_file"):
-            path = str(tool_args.get("path") or tool_args.get("destination", "")).lower()
-            # Scratch paths can optionally be bypassed, but outside scratch/ requires approval
-            if "scratch" not in path:
+            target_str = str(tool_args.get("path") or tool_args.get("destination", "")).strip()
+            if not target_str:
+                return True
+            try:
+                try:
+                    from backend.config import get_workspace_dir
+                except ImportError:
+                    from config import get_workspace_dir
+                ws = get_workspace_dir().resolve()
+                scratch_dir = (ws / "scratch").resolve()
+                target_path = Path(target_str)
+                resolved_target = target_path.resolve() if target_path.is_absolute() else (ws / target_path).resolve()
+                try:
+                    resolved_target.relative_to(scratch_dir)
+                    is_scratch = True
+                except ValueError:
+                    is_scratch = False
+            except Exception:
+                is_scratch = False
+
+            if not is_scratch:
                 return True
 
         # MCP tools and any external network dispatch tools are gated
@@ -92,7 +131,8 @@ class ApprovalManager:
         tool_args: Dict[str, Any],
         description: str,
         risk_level: str = "high",
-        timeout_seconds: float = 120.0
+        timeout_seconds: float = 120.0,
+        thread_id: Optional[str] = None
     ) -> bool:
         approval_id = str(uuid.uuid4())
         item = PendingApproval(
@@ -100,7 +140,8 @@ class ApprovalManager:
             tool_name=tool_name,
             tool_args=tool_args,
             description=description,
-            risk_level=risk_level
+            risk_level=risk_level,
+            thread_id=thread_id
         )
         self._pending[approval_id] = item
 
@@ -110,7 +151,8 @@ class ApprovalManager:
             "tool": tool_name,
             "args": tool_args,
             "description": description,
-            "risk_level": risk_level
+            "risk_level": risk_level,
+            "thread_id": thread_id
         }
 
         for cb in list(self._callbacks):
@@ -137,14 +179,11 @@ class ApprovalManager:
         description: str,
         risk_level: str = "high",
         timeout_seconds: float = 120.0,
+        thread_id: Optional[str] = None
     ) -> bool:
         """
         Thread-safe, blocking approval request for use from worker threads
         (e.g. LangGraph tool executors running via run_in_executor).
-
-        Uses threading.Event so it never touches an asyncio event loop from
-        the wrong thread, which is what caused the original 120-second stall.
-        The SSE event-callback is called synchronously (put_nowait is thread-safe).
         """
         approval_id = str(uuid.uuid4())
         item = PendingApproval(
@@ -153,6 +192,7 @@ class ApprovalManager:
             tool_args=tool_args,
             description=description,
             risk_level=risk_level,
+            thread_id=thread_id
         )
         self._pending[approval_id] = item
 
@@ -163,6 +203,7 @@ class ApprovalManager:
             "args": tool_args,
             "description": description,
             "risk_level": risk_level,
+            "thread_id": thread_id
         }
 
         for cb in list(self._callbacks):
@@ -197,12 +238,15 @@ class ApprovalManager:
             return True
         return False
 
-    def clear_all_pending(self, approved: bool = False):
-        """Rejects and clears all pending approvals immediately (used on abort/disconnect)."""
-        pending_ids = list(self._pending.keys())
+    def clear_all_pending(self, approved: bool = False, thread_id: Optional[str] = None):
+        """Rejects and clears pending approvals. If thread_id is specified, only that thread's approvals are cleared."""
+        if thread_id is not None:
+            pending_ids = [aid for aid, item in self._pending.items() if getattr(item, "thread_id", None) == thread_id]
+        else:
+            pending_ids = list(self._pending.keys())
         for aid in pending_ids:
             self.resolve_approval(aid, approved)
-        self._pending.clear()
+            self._pending.pop(aid, None)
 
     def list_pending(self) -> list:
         return [
@@ -211,7 +255,8 @@ class ApprovalManager:
                 "tool": v.tool_name,
                 "args": v.tool_args,
                 "description": v.description,
-                "risk_level": v.risk_level
+                "risk_level": v.risk_level,
+                "thread_id": v.thread_id
             }
             for k, v in self._pending.items()
         ]

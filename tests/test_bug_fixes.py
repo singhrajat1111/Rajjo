@@ -255,3 +255,164 @@ class TestStableEmbedder:
             "Embedder produces different vectors across processes! "
             "hash() is PYTHONHASHSEED-dependent — use hashlib instead."
         )
+
+
+# ---------------------------------------------------------------------------
+# Additional Dev Review Flaw Fix Regressions
+# ---------------------------------------------------------------------------
+
+class TestScratchPathApprovalGating:
+    """Ensure scratch check matches exact <workspace>/scratch/ path and not substring."""
+
+    def test_scratch_path_exact_match(self):
+        from backend.security.approval import approval_manager
+        from backend.config import get_workspace_dir
+        ws = get_workspace_dir()
+        scratch_file = str(ws / "scratch" / "temp.txt")
+
+        # In workspace scratch/ -> No approval required
+        assert not approval_manager.requires_approval("write_file", {"path": scratch_file}, {})
+        assert not approval_manager.requires_approval("write_file", {"path": "scratch/temp.txt"}, {})
+
+        # Substring tricks -> MUST require approval
+        assert approval_manager.requires_approval("write_file", {"path": "scratchy.exe"}, {})
+        assert approval_manager.requires_approval("write_file", {"path": "scratch_notes.py"}, {})
+        assert approval_manager.requires_approval("write_file", {"path": "my-scratch/test.txt"}, {})
+        assert approval_manager.requires_approval("write_file", {"path": "scratch/../escape.py"}, {})
+
+
+class TestPromptInjectionTrustBoundary:
+    """Untrusted external content mandates approval for shell and write operations."""
+
+    def test_untrusted_context_triggers_approval(self):
+        from backend.security.approval import approval_manager
+        # In trusted context with confirm_destructive=False, echo hello does not need approval
+        settings = {"shell_confirm_destructive": False}
+        assert not approval_manager.requires_approval("run_shell_command", {"command": "echo hello"}, settings, untrusted_context=False)
+
+        # In untrusted context, ANY shell command requires approval
+        assert approval_manager.requires_approval("run_shell_command", {"command": "echo hello"}, settings, untrusted_context=True)
+        # Even write in scratch requires approval when untrusted content is present
+        assert approval_manager.requires_approval("write_file", {"path": "scratch/temp.txt"}, settings, untrusted_context=True)
+
+
+class TestHistoryTrimmingSafety:
+    """History trimming must never orphan ToolMessages from their parent AIMessage."""
+
+    def test_trim_history_preserves_tool_call_boundary(self):
+        from backend.graph import trim_history_safely
+        from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+
+        # Construct a sequence of 35 messages with tool turns
+        msgs = [HumanMessage(content="Initial request")]
+        for i in range(16):
+            ai_msg = AIMessage(content=f"Calling tool {i}", tool_calls=[{"name": "test", "args": {}, "id": f"call_{i}"}])
+            tool_msg = ToolMessage(content=f"Result {i}", tool_call_id=f"call_{i}", name="test")
+            msgs.extend([ai_msg, tool_msg])
+
+        trimmed = trim_history_safely(msgs, max_recent=24)
+        assert trimmed[0] == msgs[0], "First message must be preserved"
+        # The first message after the cut must NOT be a ToolMessage without its AIMessage
+        second_msg = trimmed[1]
+        assert not isinstance(second_msg, ToolMessage), f"Second message {second_msg} was an orphaned ToolMessage!"
+
+
+class TestScopedClearPending:
+    """clear_all_pending must support thread_id scoping."""
+
+    def test_scoped_clear(self):
+        from backend.security.approval import approval_manager
+        import threading
+
+        t1_approved = []
+        t2_approved = []
+
+        def req_t1():
+            res = approval_manager.request_approval_sync("test", {}, "t1", timeout_seconds=2, thread_id="t1")
+            t1_approved.append(res)
+
+        def req_t2():
+            res = approval_manager.request_approval_sync("test", {}, "t2", timeout_seconds=2, thread_id="t2")
+            t2_approved.append(res)
+
+        th1 = threading.Thread(target=req_t1, daemon=True)
+        th2 = threading.Thread(target=req_t2, daemon=True)
+        th1.start()
+        th2.start()
+        import time
+        time.sleep(0.1)
+
+        # Clear only t1
+        approval_manager.clear_all_pending(approved=False, thread_id="t1")
+        th1.join(timeout=1)
+        assert len(t1_approved) == 1 and t1_approved[0] is False
+
+        # t2 should still be pending
+        pending = approval_manager.list_pending()
+        t2_items = [p for p in pending if p.get("thread_id") == "t2"]
+        assert len(t2_items) == 1
+
+        # Clean up t2
+        approval_manager.clear_all_pending(approved=True, thread_id="t2")
+        th2.join(timeout=1)
+        assert len(t2_approved) == 1 and t2_approved[0] is True
+
+
+class TestMaxIterationsEndToEnd:
+    """Ensure max iterations termination yields status='max_iterations_reached' and explicit message."""
+
+    def test_max_iterations_graph_state(self):
+        from backend.graph import planner_node
+        from langchain_core.messages import HumanMessage
+        state = {
+            "messages": [HumanMessage(content="loop forever")],
+            "iteration_count": 5,
+            "max_iterations": 4,
+            "activity_log": []
+        }
+        res = planner_node(state)
+        assert res.get("task_status") == "max_iterations_reached"
+        assert "reached maximum allowed execution limit" in res.get("final_output", "")
+
+    def test_agent_event_stream_max_iterations_done_status(self):
+        import asyncio
+        import json
+        from backend import main
+        from backend.main import agent_event_stream, ChatRequest
+
+        class MockGraph:
+            async def astream_events(self, *args, **kwargs):
+                yield {
+                    "event": "on_chain_end",
+                    "name": "planner",
+                    "data": {
+                        "output": {
+                            "task_status": "max_iterations_reached",
+                            "final_output": "Task stopped: reached maximum allowed execution limit (2 iterations)."
+                        }
+                    }
+                }
+
+        async def _run():
+            orig_graph = main.agent_graph
+            main.agent_graph = MockGraph()
+            try:
+                req = ChatRequest(message="test loop")
+                events = []
+                async for sse_chunk in agent_event_stream(req):
+                    for line in sse_chunk.splitlines():
+                        if line.startswith("data: "):
+                            events.append(json.loads(line[6:]))
+
+                done_ev = next((e for e in events if e.get("type") == "done"), None)
+                final_ev = next((e for e in events if e.get("type") == "final"), None)
+
+                assert done_ev is not None, "Stream did not emit done event"
+                assert done_ev.get("status") == "max_iterations_reached", f"Expected max_iterations_reached, got {done_ev.get('status')}"
+                assert final_ev is not None, "Stream did not emit final event"
+                assert "reached maximum allowed execution limit" in final_ev.get("content", "")
+            finally:
+                main.agent_graph = orig_graph
+
+        asyncio.run(_run())
+
