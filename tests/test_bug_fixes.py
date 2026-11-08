@@ -374,45 +374,96 @@ class TestMaxIterationsEndToEnd:
         assert res.get("task_status") == "max_iterations_reached"
         assert "reached maximum allowed execution limit" in res.get("final_output", "")
 
-    def test_agent_event_stream_max_iterations_done_status(self):
-        import asyncio
-        import json
-        from backend import main
-        from backend.main import agent_event_stream, ChatRequest
+    def test_looping_llm_graph_execution_reaches_max_iterations(self, monkeypatch):
+        """A looping LLM that continually emits tool calls must terminate with max_iterations_reached."""
+        from backend.graph import agent_graph
+        from backend.model_router import router
+        from langchain_core.messages import HumanMessage, AIMessage
 
-        class MockGraph:
-            async def astream_events(self, *args, **kwargs):
-                yield {
-                    "event": "on_chain_end",
-                    "name": "planner",
-                    "data": {
-                        "output": {
-                            "task_status": "max_iterations_reached",
-                            "final_output": "Task stopped: reached maximum allowed execution limit (2 iterations)."
-                        }
-                    }
-                }
+        class LoopingLLM:
+            def invoke(self, messages, **kwargs):
+                return AIMessage(
+                    content="",
+                    tool_calls=[{"name": "read_file", "args": {"path": "nonexistent.txt"}, "id": "call_loop"}]
+                )
+            def bind_tools(self, tools):
+                return self
 
-        async def _run():
-            orig_graph = main.agent_graph
-            main.agent_graph = MockGraph()
-            try:
-                req = ChatRequest(message="test loop")
-                events = []
-                async for sse_chunk in agent_event_stream(req):
-                    for line in sse_chunk.splitlines():
-                        if line.startswith("data: "):
-                            events.append(json.loads(line[6:]))
+        monkeypatch.setattr(router, "get_llm", lambda *a, **kw: LoopingLLM())
 
-                done_ev = next((e for e in events if e.get("type") == "done"), None)
-                final_ev = next((e for e in events if e.get("type") == "final"), None)
+        initial_state = {
+            "messages": [HumanMessage(content="run loop")],
+            "plan_steps": [],
+            "plan_summary": "",
+            "next_step": "retrieve_memory",
+            "task_status": "in_progress",
+            "scratchpad": "",
+            "user_input": "run loop",
+            "model_config": {},
+            "iteration_count": 0,
+            "max_iterations": 2,
+            "activity_log": [],
+            "final_output": ""
+        }
 
-                assert done_ev is not None, "Stream did not emit done event"
-                assert done_ev.get("status") == "max_iterations_reached", f"Expected max_iterations_reached, got {done_ev.get('status')}"
-                assert final_ev is not None, "Stream did not emit final event"
-                assert "reached maximum allowed execution limit" in final_ev.get("content", "")
-            finally:
-                main.agent_graph = orig_graph
+        final_state = agent_graph.invoke(initial_state, config={"recursion_limit": 50})
+        assert final_state.get("task_status") == "max_iterations_reached"
+        assert "reached maximum allowed execution limit" in final_state.get("final_output", "")
 
-        asyncio.run(_run())
+
+class TestAbortRejectsPendingApproval:
+    """Pending approvals must be rejected immediately on abort."""
+
+    def test_abort_unblocks_pending_approval_with_false(self):
+        from backend.security.approval import approval_manager
+        import threading
+        import time
+
+        results = []
+
+        def _ask():
+            res = approval_manager.request_approval_sync(
+                tool_name="test_abort_tool",
+                tool_args={},
+                description="Waiting for abort",
+                risk_level="high",
+                timeout_seconds=5
+            )
+            results.append(res)
+
+        t = threading.Thread(target=_ask, daemon=True)
+        t.start()
+        time.sleep(0.1)
+
+        # Trigger abort clearing
+        approval_manager.clear_all_pending(approved=False)
+        t.join(timeout=1.0)
+
+        assert not t.is_alive(), "Worker thread did not unblock on abort"
+        assert len(results) == 1
+        assert results[0] is False, "Approval should be resolved as False on abort"
+
+
+class TestUntrustedContextSourceTracking:
+    """Verifies that all browser, web, scraping, MCP, and external file reads trigger untrusted status."""
+
+    def test_untrusted_source_tool_detection(self):
+        from backend.graph import is_untrusted_source_tool
+        from backend.config import get_workspace_dir
+
+        ws = get_workspace_dir()
+
+        # Web & browser tools are untrusted sources
+        assert is_untrusted_source_tool("web_search", {"query": "test"})
+        assert is_untrusted_source_tool("open_browser_url", {"url": "https://example.com"})
+        assert is_untrusted_source_tool("browser_navigate", {"url": "https://example.com"})
+        assert is_untrusted_source_tool("browser_screenshot", {"url": "https://example.com"})
+        assert is_untrusted_source_tool("mcp_custom_tool", {})
+
+        # read_file inside workspace is trusted source
+        assert not is_untrusted_source_tool("read_file", {"path": str(ws / "notes.txt")})
+
+        # read_file outside workspace is untrusted source
+        assert is_untrusted_source_tool("read_file", {"path": "C:\\Windows\\System32\\drivers\\etc\\hosts"})
+
 

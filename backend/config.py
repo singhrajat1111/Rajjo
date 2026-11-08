@@ -133,6 +133,23 @@ def save_settings(settings: dict) -> dict:
 # Apply on module initialization
 apply_proxy_settings()
 
+def get_data_dir() -> Path:
+    """Returns the validated active data directory path, respecting settings or RAJJO_DATA_DIR env var."""
+    if "RAJJO_DATA_DIR" in os.environ:
+        p = Path(os.environ["RAJJO_DATA_DIR"]).resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    settings = load_settings()
+    custom_dir = settings.get("data_dir")
+    if custom_dir:
+        try:
+            p = Path(custom_dir).resolve()
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except Exception:
+            pass
+    return DATA_DIR
+
 def get_workspace_dir() -> Path:
     """Returns the validated active workspace directory path."""
     settings = load_settings()
@@ -329,8 +346,11 @@ PROVIDER_CONFIGS = {
     },
     "anthropic": {
         "name": "Anthropic",
-        "default_model": "claude-3-7-sonnet-20250219",
+        "default_model": "claude-sonnet-5-5",
         "models": [
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "claude-opus-5-5",
             "claude-3-7-sonnet-20250219",
             "claude-3-5-sonnet-latest",
             "claude-3-5-haiku-latest",

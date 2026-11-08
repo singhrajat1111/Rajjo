@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 import json
 import asyncio
 import hmac
@@ -162,8 +162,12 @@ class AgentSpawnRequest(BaseModel):
     background: bool = True
     delegation: bool = False
 
-# Tracked multi-agent instances
+class AbortRequest(BaseModel):
+    thread_id: Optional[str] = None
+
+# Tracked multi-agent instances and active threads
 _SPAWNED_AGENTS: Dict[str, Dict[str, Any]] = {}
+_aborted_threads: Set[str] = set()
 
 # ----------------- Health Endpoint -----------------
 
@@ -189,18 +193,28 @@ async def resolve_approval(req: ApprovalResolutionRequest):
     return {"success": ok, "approval_id": req.approval_id, "approved": req.approved}
 
 @app.post("/chat/abort")
-async def abort_chat():
+async def abort_chat(req: Optional[AbortRequest] = None):
     global _abort_requested
+    target_thread = req.thread_id if req else None
+
+    if target_thread:
+        # Thread-scoped abort
+        _aborted_threads.add(target_thread)
+        approval_manager.clear_all_pending(approved=False, thread_id=target_thread)
+        task = _active_chat_tasks.pop(target_thread, None)
+        if task and not task.done():
+            task.cancel()
+        return {"success": True, "status": "aborted", "thread_id": target_thread}
+
+    # Global abort
     _abort_requested = True
-    # Immediately reject and clear any pending approvals so worker threads unblock
     approval_manager.clear_all_pending(approved=False)
-    # Kill all running child process trees (e.g. bash, powershell, python, curl)
     process_manager.kill_all()
-    # Cancel any active running chat coroutines
     for task_id, t in list(_active_chat_tasks.items()):
         if not t.done():
             t.cancel()
     _active_chat_tasks.clear()
+    _aborted_threads.clear()
     return {"success": True, "status": "aborted", "processes_killed": True}
 
 # ----------------- Chat SSE Stream Endpoint -----------------
@@ -214,6 +228,7 @@ async def agent_event_stream(request: ChatRequest):
 
     # Reconstruct or load thread
     thread_id = request.thread_id or thread_store.create_thread(title=request.message[:40])
+    _aborted_threads.discard(thread_id)
 
     try:
         current_task = asyncio.current_task()
@@ -280,7 +295,7 @@ async def agent_event_stream(request: ChatRequest):
     try:
         # astream_events version="v2" gives us per-node metadata
         async for event in agent_graph.astream_events(initial_state, version="v2", config=run_config):
-            if _abort_requested:
+            if _abort_requested or thread_id in _aborted_threads:
                 yield f"data: {json.dumps({'type': 'status', 'message': 'Task aborted by user.'})}\n\n"
                 yield f"data: {json.dumps({'type': 'final', 'role': 'agent', 'content': '⏹️ *Task execution was stopped by user request.*'})}\n\n"
                 yield f"data: {json.dumps({'type': 'done', 'status': 'aborted'})}\n\n"
@@ -407,6 +422,10 @@ async def agent_event_stream(request: ChatRequest):
             except Exception as e:
                 print(f"[Main] Error auto-saving thread: {e}")
 
+    except asyncio.CancelledError:
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Task execution cancelled.'})}\n\n"
+        yield f"data: {json.dumps({'type': 'final', 'role': 'agent', 'content': '⏹️ *Task execution was cancelled.*'})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'status': 'aborted'})}\n\n"
     except Exception as e:
         error_msg = f"Agent runtime error: {str(e)}"
         yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
@@ -717,7 +736,8 @@ async def disable_mcp_server(name: str):
 
 @app.get("/agents")
 async def list_agents():
-    return {"agents": list(_SPAWNED_AGENTS.values())}
+    # Return serializable agent descriptors (omit internal task objects)
+    return {"agents": [{k: v for k, v in a.items() if k != "task_obj"} for a in _SPAWNED_AGENTS.values()]}
 
 @app.post("/agents/spawn")
 async def spawn_agent(req: AgentSpawnRequest):
@@ -731,6 +751,26 @@ async def spawn_agent(req: AgentSpawnRequest):
         "thread_id": thread_id,
         "created_at": datetime.now().isoformat()
     }
+
+    if req.background:
+        async def _run_subagent():
+            try:
+                sub_req = ChatRequest(message=f"[{req.role} Task]: {req.task}", thread_id=thread_id)
+                async for _ in agent_event_stream(sub_req):
+                    pass
+                if agent_id in _SPAWNED_AGENTS:
+                    _SPAWNED_AGENTS[agent_id]["status"] = "completed"
+            except asyncio.CancelledError:
+                if agent_id in _SPAWNED_AGENTS:
+                    _SPAWNED_AGENTS[agent_id]["status"] = "stopped"
+            except Exception as e:
+                if agent_id in _SPAWNED_AGENTS:
+                    _SPAWNED_AGENTS[agent_id]["status"] = "error"
+                    _SPAWNED_AGENTS[agent_id]["error"] = str(e)
+
+        task = asyncio.create_task(_run_subagent())
+        info["task_obj"] = task
+
     _SPAWNED_AGENTS[agent_id] = info
     return {"success": True, "agent_id": agent_id, "role": req.role, "task": req.task, "status": "running", "thread_id": thread_id}
 
@@ -738,6 +778,13 @@ async def spawn_agent(req: AgentSpawnRequest):
 async def stop_agent(agent_id: str):
     if agent_id in _SPAWNED_AGENTS:
         _SPAWNED_AGENTS[agent_id]["status"] = "stopped"
+        task = _SPAWNED_AGENTS[agent_id].pop("task_obj", None)
+        if task and not task.done():
+            task.cancel()
+        tid = _SPAWNED_AGENTS[agent_id].get("thread_id")
+        if tid:
+            _aborted_threads.add(tid)
+            approval_manager.clear_all_pending(approved=False, thread_id=tid)
         return {"success": True, "message": f"Agent {agent_id} stopped"}
     return {"success": False, "message": f"Agent {agent_id} not found"}
 

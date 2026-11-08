@@ -77,25 +77,82 @@ def retrieve_memory_node(state: AgentState) -> Dict[str, Any]:
         "plan_steps": []
     }
 
+def is_untrusted_source_tool(tool_name: str, tool_args: Dict[str, Any]) -> bool:
+    """
+    Identifies tools that ingest external, unverified content into the agent context:
+    - Web searches and HTTP scrapers
+    - Browser automation (DOM inspection, navigation, typing, clicks, screenshots)
+    - All external MCP server tools (mcp_*)
+    - File reads targeting paths outside the protected workspace
+    """
+    name = tool_name.lower()
+    if (
+        name.startswith("browser_")
+        or name.startswith("web_")
+        or name.startswith("mcp_")
+        or name.startswith("fetch_")
+        or name.startswith("scrape_")
+        or name.startswith("http_")
+        or name in ("open_browser_url", "open_visible_browser")
+    ):
+        return True
+
+    if name == "read_file":
+        path_str = str(tool_args.get("path", "")).strip()
+        if path_str:
+            try:
+                from backend.config import get_workspace_dir
+                from pathlib import Path
+                ws = get_workspace_dir().resolve()
+                p = Path(path_str)
+                resolved = p.resolve() if p.is_absolute() else (ws / p).resolve()
+                try:
+                    resolved.relative_to(ws)
+                except ValueError:
+                    return True
+            except Exception:
+                return True
+
+    return False
+
 def plan_node(state: AgentState) -> Dict[str, Any]:
     """
-    Initial Plan Node: sets an execution skeleton based on user intent.
+    Initial Plan Node: dynamically formulates contextual execution steps based on user intent.
     """
-    user_input = state.get("user_input", "")
+    user_input = state.get("user_input", "").strip()
     activity = list(state.get("activity_log", []))
+    lower = user_input.lower()
 
-    # Form heuristic initial plan steps based on user intent
-    task_hint = user_input.strip()[:60] if user_input else "user task"
-    steps = [
-        {"id": 1, "description": f"Analyze intent & dependencies: {task_hint}", "status": "completed"},
-        {"id": 2, "description": "Execute tool actions (file, shell, search, browser)", "status": "in_progress"},
-        {"id": 3, "description": "Synthesize results and formulate final response", "status": "pending"}
-    ]
+    if any(k in lower for k in ("search", "find online", "lookup", "who is", "what is", "news", "browse")):
+        steps = [
+            {"id": 1, "description": "Formulate targeted queries and retrieve external web/knowledge sources", "status": "in_progress"},
+            {"id": 2, "description": "Extract, cross-verify, and filter relevant data", "status": "pending"},
+            {"id": 3, "description": "Synthesize verified findings into structured response", "status": "pending"}
+        ]
+    elif any(k in lower for k in ("file", "write", "create", "delete", "edit", "code", "script", "read")):
+        steps = [
+            {"id": 1, "description": "Inspect filesystem context and verify target paths", "status": "in_progress"},
+            {"id": 2, "description": "Perform scoped file operations and code generation", "status": "pending"},
+            {"id": 3, "description": "Verify file state and summarize changes", "status": "pending"}
+        ]
+    elif any(k in lower for k in ("run", "bash", "command", "shell", "powershell", "build", "test", "install")):
+        steps = [
+            {"id": 1, "description": "Analyze command parameters and sandbox safety boundaries", "status": "in_progress"},
+            {"id": 2, "description": "Execute monitored command with process tree tracking", "status": "pending"},
+            {"id": 3, "description": "Evaluate stdout/stderr exit codes and report execution outcome", "status": "pending"}
+        ]
+    else:
+        task_preview = user_input[:50] if user_input else "user task"
+        steps = [
+            {"id": 1, "description": f"Analyze intent & dependencies for '{task_preview}'", "status": "in_progress"},
+            {"id": 2, "description": "Execute necessary tool actions and intermediate steps", "status": "pending"},
+            {"id": 3, "description": "Consolidate results and deliver comprehensive response", "status": "pending"}
+        ]
 
     activity.append({
         "type": "plan",
         "steps": steps,
-        "message": "Structured execution plan created."
+        "message": "Dynamic execution plan formulated."
     })
 
     return {
@@ -244,13 +301,13 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     thread_id = state.get("thread_id")
 
     # Prompt-injection trust boundary:
-    # Check if untrusted external content (web page, MCP tool output, browser content) is in context
+    # Check if untrusted external content (web page, MCP tool output, browser content, external file read) is in context
     has_untrusted = bool(state.get("has_untrusted_content", False))
     if not has_untrusted:
         for m in state.get("messages", []):
             if getattr(m, "type", "") == "tool":
                 tname = getattr(m, "name", "")
-                if tname in ("web_search", "fetch_webpage", "open_visible_browser", "browser_navigate") or tname.startswith("mcp_"):
+                if is_untrusted_source_tool(tname, {}):
                     has_untrusted = True
                     break
 
@@ -260,14 +317,12 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         from config import load_settings as _load_settings
     settings = _load_settings()
 
-    UNTRUSTED_TOOLS = {"web_search", "fetch_webpage", "open_visible_browser", "browser_navigate", "browser_click", "browser_type"}
-
     for tool_call in getattr(last_message, "tool_calls", []):
         tool_name = tool_call["name"]
         tool_args = tool_call.get("args", {})
         tool_id = tool_call.get("id", f"call_{int(time.time()*1000)}")
 
-        if tool_name in UNTRUSTED_TOOLS or tool_name.startswith("mcp_"):
+        if is_untrusted_source_tool(tool_name, tool_args):
             has_untrusted = True
 
         activity_desc = f"Running tool '{tool_name}'..."
