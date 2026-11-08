@@ -600,18 +600,74 @@ class TestUntrustedWrittenFilePropagation:
     """Verifies that reading a file created during untrusted context triggers untrusted status."""
 
     def test_written_file_taint(self):
-        from backend.graph import is_untrusted_source_tool, _UNTRUSTED_WRITTEN_FILES
+        from backend.graph import is_untrusted_source_tool, mark_file_untrusted, _UNTRUSTED_WRITTEN_FILES
         from backend.config import get_workspace_dir
 
         ws = get_workspace_dir()
         tainted_file = str((ws / "tainted_script.py").resolve())
-        _UNTRUSTED_WRITTEN_FILES.add(tainted_file)
+        mark_file_untrusted(tainted_file)
 
         try:
             assert is_untrusted_source_tool("read_file", {"path": tainted_file})
             assert is_untrusted_source_tool("read_file", {"path": "tainted_script.py"})
         finally:
-            _UNTRUSTED_WRITTEN_FILES.discard(tainted_file)
+            _UNTRUSTED_WRITTEN_FILES.clear()
+
+
+class TestSubagentRoleToolRestriction:
+    """Verifies that subagents with restricted tool suites cannot execute forbidden tools."""
+
+    def test_forbidden_tool_rejected(self):
+        from backend.graph import tool_executor_node
+        from langchain_core.messages import AIMessage
+        import json
+
+        fake_aimessage = AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "run_shell_command",
+                "args": {"command": "dir"},
+                "id": "call_forbidden_1"
+            }]
+        )
+
+        state = {
+            "messages": [fake_aimessage],
+            "role_tools": ["read_file", "view_workspace"],
+            "has_untrusted_content": False,
+            "activity_log": [],
+            "thread_id": "test_role_thread"
+        }
+
+        result = tool_executor_node(state)
+        tool_msgs = result.get("messages", [])
+        assert len(tool_msgs) == 1
+        parsed = json.loads(tool_msgs[0].content)
+        assert parsed.get("success") is False
+        assert parsed.get("error", {}).get("code") == "ROLE_RESTRICTION"
+        assert "forbidden" in parsed.get("error", {}).get("message", "").lower()
+
+
+class TestDataDirMigration:
+    """Verifies that relocating data_dir copies database, memory, and config to the new path."""
+
+    def test_migrate_data_dir_copies_files(self, tmp_path):
+        from backend.config import migrate_data_dir
+
+        src = tmp_path / "old_data"
+        src.mkdir()
+        (src / "rajjo.db").write_text("dummy database content", encoding="utf-8")
+        (src / "config.json").write_text('{"theme": "dark"}', encoding="utf-8")
+
+        dst = tmp_path / "new_data"
+
+        res = migrate_data_dir(src, dst)
+        assert "rajjo.db" in res["migrated"]
+        assert "config.json" in res["migrated"]
+        assert (dst / "rajjo.db").exists()
+        assert (dst / "rajjo.db").read_text(encoding="utf-8") == "dummy database content"
+        assert (dst / "config.json").exists()
+
 
 
 

@@ -147,6 +147,10 @@ export default function App() {
     setSidebarOpen,
     commandPaletteOpen,
     setCommandPaletteOpen,
+    fetchApprovals,
+    pendingApproval,
+    pendingApprovalsList,
+    resolveApproval,
   } = useStore();
 
   const [isVisibleWindowOpen, setIsVisibleWindowOpen] = useState(false);
@@ -239,12 +243,25 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [sidebarOpen, setSidebarOpen, setCommandPaletteOpen, isVisibleWindowOpen]);
 
+  // Continuous app-level approval polling (runs across all tabs for subagents and background tasks)
+  useEffect(() => {
+    fetchApprovals?.();
+    const interval = setInterval(() => {
+      fetchApprovals?.();
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [fetchApprovals]);
+
+  const pendingCount = (pendingApprovalsList && pendingApprovalsList.length > 0)
+    ? pendingApprovalsList.length
+    : (pendingApproval ? 1 : 0);
+
   const tabConfig = [
-    { id: 'chat', icon: MessageSquare, label: 'Chat', short: 'Agent' },
+    { id: 'chat', icon: MessageSquare, label: 'Chat', short: 'Agent', badge: pendingCount > 0 ? String(pendingCount) : undefined },
     { id: 'models', icon: Cpu, label: 'Models', short: 'LLM' },
     { id: 'tools', icon: Wrench, label: 'Tools', short: 'Auto' },
     { id: 'memory', icon: Database, label: 'Memory', short: 'Brain' },
-    // Multi-agent and MCP tabs hidden until full feature stabilization
+    { id: 'agents', icon: GitBranch, label: 'Agents', short: 'Multi', badge: pendingCount > 0 ? String(pendingCount) : undefined },
     { id: 'settings', icon: Settings, label: 'Settings', short: 'Cfg' },
   ];
 
@@ -283,7 +300,47 @@ export default function App() {
         />
 
         {/* Main Content */}
-        <main className="flex-1 relative overflow-hidden bg-[var(--bg-deepest)]">
+        <main className="flex-1 relative overflow-hidden bg-[var(--bg-deepest)] flex flex-col">
+          {pendingApproval && activeTab !== 'chat' && (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="bg-amber-500/15 border-b-2 border-amber-500/40 p-2.5 px-4 flex items-center justify-between shrink-0 z-30 backdrop-blur-md"
+            >
+              <div className="flex items-center gap-2.5 text-xs text-amber-200">
+                <ShieldAlert size={18} className="text-amber-400 animate-pulse shrink-0" />
+                <span>
+                  <strong>Approval Required:</strong> Tool <code className="text-amber-300 font-mono font-bold">{pendingApproval.tool}</code>
+                  {pendingApproval.args?.command && <span> (`{pendingApproval.args.command.slice(0, 45)}`)</span>}
+                  {pendingApprovalsList?.length > 1 && (
+                    <span className="ml-1 text-amber-400 font-bold font-mono">({pendingApprovalsList.length} total pending)</span>
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => resolveApproval(pendingApproval.approval_id, true)}
+                  className="btn btn-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3 py-1 rounded-md shadow-sm"
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() => resolveApproval(pendingApproval.approval_id, false)}
+                  className="btn btn-xs bg-rose-600 hover:bg-rose-500 text-white font-medium px-3 py-1 rounded-md shadow-sm"
+                >
+                  Deny
+                </button>
+                <button
+                  onClick={() => setActiveTab('chat')}
+                  className="btn btn-xs btn-ghost text-xs text-amber-300 underline hover:text-amber-200 ml-1"
+                >
+                  Open in Chat
+                </button>
+              </div>
+            </motion.div>
+          )}
+
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}

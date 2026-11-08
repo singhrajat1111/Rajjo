@@ -43,7 +43,51 @@ class AgentState(TypedDict, total=False):
     role_tools: Optional[List[str]]
 
 # Track files written from web/MCP/untrusted content so reading them propagates taint
-_UNTRUSTED_WRITTEN_FILES: Set[str] = set()
+import os
+from pathlib import Path
+
+def _normalize_path(p_str: str) -> str:
+    try:
+        from backend.config import get_workspace_dir
+        ws = get_workspace_dir().resolve()
+    except Exception:
+        ws = Path.cwd().resolve()
+    p = Path(p_str)
+    resolved = p.resolve() if p.is_absolute() else (ws / p).resolve()
+    return os.path.normcase(str(resolved))
+
+def _get_tainted_files_store() -> Path:
+    try:
+        from backend.config import DATA_DIR
+        return DATA_DIR / ".untrusted_files.json"
+    except Exception:
+        return Path(".untrusted_files.json")
+
+def _load_untrusted_files() -> Set[str]:
+    store = _get_tainted_files_store()
+    if store.exists():
+        try:
+            with open(store, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return set(data) if isinstance(data, list) else set()
+        except Exception:
+            pass
+    return set()
+
+def _save_untrusted_files(files: Set[str]):
+    store = _get_tainted_files_store()
+    try:
+        with open(store, "w", encoding="utf-8") as f:
+            json.dump(list(files), f)
+    except Exception:
+        pass
+
+_UNTRUSTED_WRITTEN_FILES: Set[str] = _load_untrusted_files()
+
+def mark_file_untrusted(path_str: str):
+    norm = _normalize_path(path_str)
+    _UNTRUSTED_WRITTEN_FILES.add(norm)
+    _save_untrusted_files(_UNTRUSTED_WRITTEN_FILES)
 
 # 2. Nodes Implementation
 
@@ -109,14 +153,22 @@ def is_untrusted_source_tool(tool_name: str, tool_args: Dict[str, Any]) -> bool:
         if path_str:
             try:
                 from backend.config import get_workspace_dir
-                from pathlib import Path
                 ws = get_workspace_dir().resolve()
-                p = Path(path_str)
-                resolved = p.resolve() if p.is_absolute() else (ws / p).resolve()
-                if str(resolved) in _UNTRUSTED_WRITTEN_FILES:
+                norm = _normalize_path(path_str)
+                # 1. Tainted files: files written from web/MCP/untrusted context
+                if (
+                    norm in _UNTRUSTED_WRITTEN_FILES
+                    or any(os.path.normcase(f) == norm for f in _UNTRUSTED_WRITTEN_FILES)
+                ):
                     return True
+                # 2. Designated untrusted folders inside workspace
+                p = Path(norm)
+                for part in p.parts:
+                    if part.lower() in ("downloads", "download", "external", "inbox", "scraped"):
+                        return True
+                # 3. Outside workspace jail
                 try:
-                    resolved.relative_to(ws)
+                    p.relative_to(ws)
                 except ValueError:
                     return True
             except Exception:
@@ -333,10 +385,26 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         from config import load_settings as _load_settings
     settings = _load_settings()
 
+    role_tools_filter = state.get("role_tools")
+
     for tool_call in getattr(last_message, "tool_calls", []):
         tool_name = tool_call["name"]
         tool_args = tool_call.get("args", {})
         tool_id = tool_call.get("id", f"call_{int(time.time()*1000)}")
+
+        # Enforce role tool boundary
+        if role_tools_filter and tool_name not in role_tools_filter:
+            forbidden_msg = json.dumps({
+                "success": False,
+                "tool": tool_name,
+                "error": {
+                    "code": "ROLE_RESTRICTION",
+                    "message": f"Tool '{tool_name}' is forbidden for subagent role. Permitted tools: {', '.join(role_tools_filter)}"
+                }
+            })
+            activity.append({"type": "tool_end", "tool": tool_name, "success": False, "message": f"Tool '{tool_name}' forbidden for subagent role."})
+            tool_outputs.append(ToolMessage(content=forbidden_msg, tool_call_id=tool_id, name=tool_name))
+            continue
 
         if is_untrusted_source_tool(tool_name, tool_args):
             has_untrusted = True
@@ -397,12 +465,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                     tpath = tool_args.get("path") or tool_args.get("destination", "")
                     if tpath:
                         try:
-                            from backend.config import get_workspace_dir
-                            from pathlib import Path
-                            ws = get_workspace_dir().resolve()
-                            p = Path(tpath)
-                            resolved_str = str((p.resolve() if p.is_absolute() else (ws / p)).resolve())
-                            _UNTRUSTED_WRITTEN_FILES.add(resolved_str)
+                            mark_file_untrusted(tpath)
                         except Exception:
                             pass
 

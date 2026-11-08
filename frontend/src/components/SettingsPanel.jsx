@@ -440,7 +440,7 @@ export default function SettingsPanel() {
                   <div>
                     <label className="block text-xs text-[var(--fg-muted)] mb-1 flex items-center justify-between">
                       <span>Rajjo Base Data Directory</span>
-                      <span className="text-[10px] text-amber-400 font-medium">(Requires app restart to take effect)</span>
+                      <span className="text-[10px] text-amber-400 font-medium">Automatic migration &bull; Restart required</span>
                     </label>
                     <input
                       type="text"
@@ -450,7 +450,7 @@ export default function SettingsPanel() {
                       className="input font-mono text-xs w-full"
                     />
                     <p className="text-xs text-[var(--fg-muted)] mt-1">
-                      Contains SQLite databases, semantic memory vector store, logs, and screenshots. Takes effect on next application restart.
+                      Contains SQLite databases, semantic memory vector store, logs, and secrets. When changing directory, existing databases and memory are copied to the new path automatically upon save. Restart Rajjo for the new directory to take effect.
                     </p>
                   </div>
 

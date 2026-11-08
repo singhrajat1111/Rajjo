@@ -158,6 +158,34 @@ def get_data_dir() -> Path:
             pass
     return DATA_DIR
 
+def migrate_data_dir(source_dir: Path, target_dir: Path) -> dict:
+    """
+    Copies database, memory, vectorstore, config, and credentials from source_dir to target_dir
+    when the data directory is relocated, ensuring data is preserved after restart.
+    """
+    import shutil
+    source_dir = Path(source_dir).resolve()
+    target_dir = Path(target_dir).resolve()
+    if source_dir == target_dir:
+        return {"migrated": [], "source": str(source_dir), "target": str(target_dir)}
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    migrated = []
+    items_to_copy = ["rajjo.db", "memory", "vectorstore", "config.json", "secrets.json", "logs", "screenshots", "mcp"]
+    for item_name in items_to_copy:
+        src = source_dir / item_name
+        dst = target_dir / item_name
+        if src.exists() and not dst.exists():
+            try:
+                if src.is_dir():
+                    shutil.copytree(str(src), str(dst))
+                else:
+                    shutil.copy2(str(src), str(dst))
+                migrated.append(item_name)
+            except Exception as e:
+                print(f"[Rajjo Config] Error migrating {item_name}: {e}")
+    return {"migrated": migrated, "source": str(source_dir), "target": str(target_dir)}
+
 def get_workspace_dir() -> Path:
     """Returns the validated active workspace directory path."""
     settings = load_settings()

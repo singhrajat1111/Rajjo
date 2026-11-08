@@ -52,37 +52,22 @@ function log(level, message, error = null) {
 }
 
 // ----------------- Session Token Management -----------------
+let inMemorySessionToken = null;
 
 function getOrCreateApiToken() {
-  if (process.env.RAJJO_API_TOKEN && process.env.RAJJO_API_TOKEN.trim()) {
-    return process.env.RAJJO_API_TOKEN.trim();
+  if (inMemorySessionToken) {
+    return inMemorySessionToken;
   }
-  const dataDir = getDataDir();
-  const tokenFile = path.join(dataDir, '.session_token');
-  try {
-    if (fs.existsSync(tokenFile)) {
-      const stored = fs.readFileSync(tokenFile, 'utf-8').trim();
-      if (stored.length >= 32) {
-        process.env.RAJJO_API_TOKEN = stored;
-        return stored;
-      }
-    }
-  } catch (e) {
-    log('error', 'Error reading existing session token', e);
+  if (process.env.RAJJO_API_TOKEN && process.env.RAJJO_API_TOKEN.trim()) {
+    inMemorySessionToken = process.env.RAJJO_API_TOKEN.trim();
+    return inMemorySessionToken;
   }
 
-  const generated = crypto.randomBytes(32).toString('hex');
-  process.env.RAJJO_API_TOKEN = generated;
-  try {
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    // Restrict permissions on session token
-    fs.writeFileSync(tokenFile, generated, { encoding: 'utf-8', mode: 0o600 });
-  } catch (e) {
-    log('error', 'Error writing new session token', e);
-  }
-  return generated;
+  // Generate ephemeral in-memory 64-char hex token (RAM only, no disk write)
+  inMemorySessionToken = crypto.randomBytes(32).toString('hex');
+  process.env.RAJJO_API_TOKEN = inMemorySessionToken;
+  process.env.RAJJO_PERSIST_TOKEN = '0';
+  return inMemorySessionToken;
 }
 
 // ----------------- Port Probing -----------------

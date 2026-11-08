@@ -56,7 +56,15 @@ const SidebarItem = ({ tab, active, onClick, isCollapsed }) => (
   >
     <TabIcon icon={tab.icon} active={active} />
     {!isCollapsed && (
-      <span className="font-medium text-sm truncate">{tab.label}</span>
+      <span className="font-medium text-sm truncate flex-1 text-left">{tab.label}</span>
+    )}
+    {tab.badge && (
+      <span className={cn(
+        "badge bg-amber-500 text-black font-mono font-bold text-[10px] px-1.5 py-0.5 rounded-full animate-pulse",
+        isCollapsed ? "absolute top-1.5 right-1.5 shadow-sm" : "ml-auto shadow-sm"
+      )}>
+        {tab.badge}
+      </span>
     )}
     {active && !isCollapsed && (
       <motion.div

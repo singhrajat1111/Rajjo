@@ -23,7 +23,7 @@ from backend.config import (
     DATA_DIR, load_settings, save_settings,
     get_secret, save_secret, get_masked_secrets_summary, get_provider_config, get_all_providers,
     get_or_create_session_token, get_workspace_dir, apply_proxy_settings,
-    PROVIDER_CONFIGS
+    PROVIDER_CONFIGS, migrate_data_dir
 )
 from backend.model_router import router, ModelRouter
 from backend.tools.registry import registry
@@ -684,7 +684,12 @@ async def update_settings_endpoint(req: SettingsUpdateRequest):
         p = Path(req.workspace_dir).resolve()
         p.mkdir(parents=True, exist_ok=True)
         updates["workspace_dir"] = str(p)
-    if req.data_dir is not None: updates["data_dir"] = req.data_dir
+    if req.data_dir is not None:
+        new_d = Path(req.data_dir).resolve()
+        current_d = Path(load_settings().get("data_dir", str(DATA_DIR))).resolve()
+        updates["data_dir"] = str(new_d)
+        if new_d != current_d:
+            migrate_data_dir(current_d, new_d)
     if req.shell_timeout is not None: updates["shell_timeout"] = req.shell_timeout
     if req.shell_confirm_destructive is not None: updates["shell_confirm_destructive"] = req.shell_confirm_destructive
     if req.auto_save_conversations is not None: updates["auto_save_conversations"] = req.auto_save_conversations

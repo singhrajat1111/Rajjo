@@ -192,10 +192,14 @@ npm run electron:dev
 ## 🧪 Testing & Evaluation
 
 ### Core Test Suite
-Run the 18-point core verification suite testing configuration, filesystem jail, shell approval gating, GGUF binary validation, GGUF caching, browser URL encoding, reflector regexes, memory deduplication, SQLite threads, dynamic model discovery, and process management:
+Run the full 60-test automated verification suite covering security boundaries, process trees, human approval gating, subagent roles & approvals, thread-scoped abort, ChromaDB protocol integration, GGUF binary validation, and memory deduplication:
 
 ```bash
-.\backend\venv\Scripts\python.exe tests/test_core.py
+# Windows
+.\backend\venv\Scripts\python.exe -m pytest tests/ -v
+
+# Linux / macOS
+./backend/venv/bin/python -m pytest tests/ -v
 ```
 
 ### 20-Task Evaluation Benchmark
@@ -281,10 +285,11 @@ npm run dist
 - **Process Isolation**: External shell commands run in separate process groups with scrubbed environment variables (stripping keys matching `*API_KEY*`, `RAJJO_*`, etc.) to prevent secret exfiltration to child processes.
 - **IPC & Local API Defense**: FastAPI endpoints require a session token authenticated via `hmac.compare_digest`. Electron isolates renderer context and denies arbitrary window creation or out-of-origin web navigation.
 
-### Known Limitations
-- **Multi-Agent Stubs**: Multi-agent orchestration (`/agents/spawn`) is currently experimental and not fully integrated into the primary task execution graph.
-- **Packaging Requirements**: Standalone packaged builds require Playwright Chromium to be downloaded on the host machine (`npx playwright install chromium`) if browser automation is used.
-- **GGUF Platform Support**: Direct in-process GGUF acceleration requires native C++ runtime compilation or precompiled platform wheels (`llama-cpp-python`).
+### Known Limitations & Experimental Features
+- **Subagent Role Specialization (Experimental)**: Subagents (`/agents/spawn`) run dedicated execution threads with customized system directives and scoped tool permissions (`coder`, `researcher`, `reviewer`, `general`). While fully functional and integrated with global UI approval polling, multi-agent cooperative workflows remain in active alpha experimentation.
+- **Data Directory Migration**: When relocating `data_dir` in Settings, existing SQLite databases, vector stores, and configurations are automatically copied to the target path. An application restart is required for the backend process to mount the relocated directory.
+- **Browser Automation Runtime**: Browser tools prioritize connecting to local running Chrome/Edge over CDP or launching system Chrome/Edge. If neither is installed, run `npx playwright install chromium` to fetch the Playwright browser binaries.
+- **Direct GGUF Engine**: In-process GGUF model execution relies on `llama-cpp-python` as an optional extra. For CPU/GPU acceleration, install the appropriate precompiled wheel or build from source with OpenBLAS/CUDA.
 
 ---
 
