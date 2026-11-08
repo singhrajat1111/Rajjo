@@ -463,7 +463,155 @@ class TestUntrustedContextSourceTracking:
         # read_file inside workspace is trusted source
         assert not is_untrusted_source_tool("read_file", {"path": str(ws / "notes.txt")})
 
-        # read_file outside workspace is untrusted source
-        assert is_untrusted_source_tool("read_file", {"path": "C:\\Windows\\System32\\drivers\\etc\\hosts"})
+        # read_file outside workspace is untrusted source (platform-aware)
+        import sys
+        outside_path = "C:\\Windows\\System32\\drivers\\etc\\hosts" if sys.platform == "win32" else "/etc/hosts"
+        assert is_untrusted_source_tool("read_file", {"path": outside_path})
+        assert is_untrusted_source_tool("read_file", {"path": "../../../outside.txt"})
+
+
+class TestChromaDeterministicEmbedder:
+    """Verifies that DeterministicLocalEmbedder implements Chroma's EmbeddingFunction protocol."""
+
+    def test_embedder_interface_methods(self):
+        from backend.memory.semantic import DeterministicLocalEmbedder
+        embedder = DeterministicLocalEmbedder()
+        assert hasattr(embedder, "name")
+        assert embedder.name() == "deterministic-local-embedder"
+        assert hasattr(embedder, "default_space")
+        assert embedder.default_space() == "cosine"
+
+        vectors = embedder(["test query document", "another sample"])
+        assert len(vectors) == 2
+        assert len(vectors[0]) == 128
+        assert len(vectors[1]) == 128
+
+    def test_chroma_collection_integration(self):
+        try:
+            import chromadb
+        except ImportError:
+            pytest.skip("chromadb not installed")
+
+        from backend.memory.semantic import DeterministicLocalEmbedder
+        client = chromadb.Client()
+        embedder = DeterministicLocalEmbedder()
+        collection = client.create_collection(
+            name="test_regress_chroma",
+            embedding_function=embedder
+        )
+        try:
+            collection.add(
+                documents=["FastAPI and LangGraph powers Rajjo backend.", "Windows 11 desktop agent."],
+                ids=["doc1", "doc2"],
+                metadatas=[{"approved": True}, {"approved": True}]
+            )
+            res = collection.query(query_texts=["What framework does Rajjo use?"], n_results=1)
+            assert len(res["ids"][0]) == 1
+            assert res["ids"][0][0] in ("doc1", "doc2")
+
+            from backend.memory.semantic import _score_hybrid
+            s1 = _score_hybrid("What framework does Rajjo use?", "FastAPI and LangGraph powers Rajjo backend.")
+            s2 = _score_hybrid("What framework does Rajjo use?", "Windows 11 desktop agent.")
+            assert s1 > s2
+        finally:
+            client.delete_collection("test_regress_chroma")
+
+
+class TestSubagentApprovalAndThreadScoping:
+    """Verifies that subagent approvals are visible in the manager and thread-scoped."""
+
+    def test_subagent_approval_in_manager(self):
+        from backend.security.approval import approval_manager
+        import threading
+        import time
+
+        results = []
+
+        def _worker():
+            res = approval_manager.request_approval_sync(
+                tool_name="write_file",
+                tool_args={"path": "subagent_output.py"},
+                description="Subagent coder writing file",
+                risk_level="high",
+                timeout_seconds=5,
+                thread_id="sub-thread-42"
+            )
+            results.append(res)
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        time.sleep(0.1)
+
+        pending = approval_manager.list_pending()
+        subagent_pending = [p for p in pending if p.get("thread_id") == "sub-thread-42"]
+        assert len(subagent_pending) == 1
+        assert subagent_pending[0]["tool"] == "write_file"
+        aid = subagent_pending[0]["approval_id"]
+
+        approval_manager.resolve_approval(aid, True)
+        t.join(timeout=1.0)
+        assert len(results) == 1
+        assert results[0] is True
+
+
+class TestThreadScopedAbortProcessKill:
+    """Verifies that thread-scoped abort terminates only that thread's processes."""
+
+    def test_thread_scoped_kill(self):
+        from backend.security.process_manager import process_manager
+        import time
+
+        kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+        if sys.platform != "win32":
+            kwargs["start_new_session"] = True
+        else:
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        p_a = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+        p_b = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+
+        try:
+            process_manager.register_process(p_a.pid, thread_id="thread-AAA")
+            process_manager.register_process(p_b.pid, thread_id="thread-BBB")
+
+            assert p_a.poll() is None
+            assert p_b.poll() is None
+
+            # Kill thread-AAA only
+            killed = process_manager.kill_thread_processes("thread-AAA")
+            assert p_a.pid in killed
+
+            # Wait up to 2 seconds for OS process cleanup after taskkill
+            try:
+                p_a.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                pass
+            assert p_a.poll() is not None, "Process A should have been killed"
+            assert p_b.poll() is None, "Process B should still be running"
+        finally:
+            process_manager.kill_thread_processes("thread-BBB")
+            if p_b.poll() is None:
+                p_b.kill()
+            if p_a.poll() is None:
+                p_a.kill()
+
+
+class TestUntrustedWrittenFilePropagation:
+    """Verifies that reading a file created during untrusted context triggers untrusted status."""
+
+    def test_written_file_taint(self):
+        from backend.graph import is_untrusted_source_tool, _UNTRUSTED_WRITTEN_FILES
+        from backend.config import get_workspace_dir
+
+        ws = get_workspace_dir()
+        tainted_file = str((ws / "tainted_script.py").resolve())
+        _UNTRUSTED_WRITTEN_FILES.add(tainted_file)
+
+        try:
+            assert is_untrusted_source_tool("read_file", {"path": tainted_file})
+            assert is_untrusted_source_tool("read_file", {"path": "tainted_script.py"})
+        finally:
+            _UNTRUSTED_WRITTEN_FILES.discard(tainted_file)
+
 
 

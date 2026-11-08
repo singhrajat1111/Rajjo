@@ -1,6 +1,7 @@
 import json
 import time
-from typing import Annotated, TypedDict, List, Dict, Any, Optional
+import re
+from typing import Annotated, TypedDict, List, Dict, Any, Optional, Set
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
@@ -38,6 +39,11 @@ class AgentState(TypedDict, total=False):
     final_output: str
     thread_id: Optional[str]
     has_untrusted_content: Optional[bool]
+    role_prompt: Optional[str]
+    role_tools: Optional[List[str]]
+
+# Track files written from web/MCP/untrusted content so reading them propagates taint
+_UNTRUSTED_WRITTEN_FILES: Set[str] = set()
 
 # 2. Nodes Implementation
 
@@ -84,6 +90,7 @@ def is_untrusted_source_tool(tool_name: str, tool_args: Dict[str, Any]) -> bool:
     - Browser automation (DOM inspection, navigation, typing, clicks, screenshots)
     - All external MCP server tools (mcp_*)
     - File reads targeting paths outside the protected workspace
+    - File reads targeting files previously written from untrusted/external context
     """
     name = tool_name.lower()
     if (
@@ -106,6 +113,8 @@ def is_untrusted_source_tool(tool_name: str, tool_args: Dict[str, Any]) -> bool:
                 ws = get_workspace_dir().resolve()
                 p = Path(path_str)
                 resolved = p.resolve() if p.is_absolute() else (ws / p).resolve()
+                if str(resolved) in _UNTRUSTED_WRITTEN_FILES:
+                    return True
                 try:
                     resolved.relative_to(ws)
                 except ValueError:
@@ -123,19 +132,19 @@ def plan_node(state: AgentState) -> Dict[str, Any]:
     activity = list(state.get("activity_log", []))
     lower = user_input.lower()
 
-    if any(k in lower for k in ("search", "find online", "lookup", "who is", "what is", "news", "browse")):
+    if re.search(r"\b(search|find online|lookup|who is|what is|news|browse|fetch)\b", lower):
         steps = [
             {"id": 1, "description": "Formulate targeted queries and retrieve external web/knowledge sources", "status": "in_progress"},
             {"id": 2, "description": "Extract, cross-verify, and filter relevant data", "status": "pending"},
             {"id": 3, "description": "Synthesize verified findings into structured response", "status": "pending"}
         ]
-    elif any(k in lower for k in ("file", "write", "create", "delete", "edit", "code", "script", "read")):
+    elif re.search(r"\b(file|write|create|delete|edit|code|script|read|refactor)\b", lower):
         steps = [
             {"id": 1, "description": "Inspect filesystem context and verify target paths", "status": "in_progress"},
             {"id": 2, "description": "Perform scoped file operations and code generation", "status": "pending"},
             {"id": 3, "description": "Verify file state and summarize changes", "status": "pending"}
         ]
-    elif any(k in lower for k in ("run", "bash", "command", "shell", "powershell", "build", "test", "install")):
+    elif re.search(r"\b(bash|command|shell|powershell|build|npm|pip|cargo|compile)\b", lower) or re.search(r"\brun\s+(command|script|test|build|shell)\b", lower):
         steps = [
             {"id": 1, "description": "Analyze command parameters and sandbox safety boundaries", "status": "in_progress"},
             {"id": 2, "description": "Execute monitored command with process tree tracking", "status": "pending"},
@@ -152,7 +161,7 @@ def plan_node(state: AgentState) -> Dict[str, Any]:
     activity.append({
         "type": "plan",
         "steps": steps,
-        "message": "Dynamic execution plan formulated."
+        "message": "Heuristic task execution plan formulated."
     })
 
     return {
@@ -208,8 +217,12 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 
     activity.append({"type": "status", "message": "Analyzing task and planning next step..."})
 
-    # Get active tools
+    # Get active tools (scoped by role_tools if subagent has a restricted tool suite)
     active_tools = registry.get_active_tools()
+    role_tools_filter = state.get("role_tools")
+    if role_tools_filter:
+        active_tools = [t for t in active_tools if getattr(t, "name", "") in role_tools_filter]
+
     model_cfg = state.get("model_config", {})
 
     try:
@@ -229,13 +242,16 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             "activity_log": activity
         }
 
-    # Construct System Prompt with Memory Context & Capabilities
+    # Construct System Prompt with Memory Context, Capabilities & Role Specialization
     memory_text = state.get("scratchpad", "")
     memory_instruction = f"\n\n{memory_text}" if memory_text else ""
+    role_spec = state.get("role_prompt", "")
+    role_prefix = f"\n[Specialized Role Directive]: {role_spec}\n" if role_spec else ""
 
     system_prompt = (
         "You are RAJJO, a local-first autonomous AI desktop agent built to assist users with file operations, "
         "shell commands, live web search, browser automation, and deep research & documentation.\n"
+        f"{role_prefix}"
         "Guidelines:\n"
         "1. Plan carefully. If a task requires multiple steps, execute the appropriate tool sequentially.\n"
         "2. VISIBLE BROWSER: If the user asks to 'show a visible window', 'browse visibly', "
@@ -366,8 +382,30 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         target_tool = registry.get_tool(tool_name)
         if target_tool and registry.is_enabled(tool_name):
             try:
+                if tool_name == "run_shell_command":
+                    try:
+                        from backend.tools.shell_tools import active_shell_thread
+                        active_shell_thread.set(thread_id)
+                    except Exception:
+                        pass
+
                 res = target_tool.invoke(tool_args)
                 tool_result_str = str(res)
+
+                # If write operation occurred in untrusted context, track the generated file
+                if tool_name in ("write_file", "copy_file") and has_untrusted:
+                    tpath = tool_args.get("path") or tool_args.get("destination", "")
+                    if tpath:
+                        try:
+                            from backend.config import get_workspace_dir
+                            from pathlib import Path
+                            ws = get_workspace_dir().resolve()
+                            p = Path(tpath)
+                            resolved_str = str((p.resolve() if p.is_absolute() else (ws / p)).resolve())
+                            _UNTRUSTED_WRITTEN_FILES.add(resolved_str)
+                        except Exception:
+                            pass
+
                 # Hard limit tool outputs to prevent context window explosion (50KB cap)
                 MAX_TOOL_OUTPUT = 51_200
                 if len(tool_result_str) > MAX_TOOL_OUTPUT:

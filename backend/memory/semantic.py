@@ -12,15 +12,76 @@ try:
 except ImportError:
     from config import VECTOR_STORE_DIR
 
+try:
+    from chromadb.api.types import EmbeddingFunction as ChromaEmbeddingFunction
+except Exception:
+    class ChromaEmbeddingFunction:
+        pass
 
-class DeterministicLocalEmbedder:
+
+def _score_hybrid(query: str, doc: str, base_sim: float = 0.5) -> float:
     """
-    Local-first, 100% offline deterministic embedding function.
+    Hybrid scoring combining semantic similarity with BM25-style keyword matching and coverage.
+    Ensures query-relevant technical facts rank above semantically nearby but topic-irrelevant matches.
+    """
+    STOPWORDS = {
+        "a", "an", "the", "in", "on", "at", "to", "for", "of", "and", "or",
+        "is", "are", "was", "were", "it", "this", "that", "what", "does", "do",
+        "did", "how", "why", "which", "who", "whom", "can", "could", "should"
+    }
+    q_tokens = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 1 and w not in STOPWORDS]
+    d_tokens = [w for w in re.findall(r"\w+", doc.lower()) if len(w) > 1 and w not in STOPWORDS]
+
+    if not q_tokens or not d_tokens:
+        return base_sim
+
+    d_set = set(d_tokens)
+    matched = 0.0
+    weight = 0.0
+
+    for qt in q_tokens:
+        if qt in d_set:
+            matched += 1.0
+            weight += (2.5 if len(qt) > 4 else 1.0)
+        else:
+            for dt in d_set:
+                if (qt.startswith(dt) or dt.startswith(qt)) and min(len(qt), len(dt)) >= 3:
+                    matched += 0.5
+                    weight += 0.5
+                    break
+
+    coverage = matched / len(q_tokens) if q_tokens else 0.0
+    return (0.35 * base_sim) + (0.65 * coverage * (1.0 + weight))
+
+
+class DeterministicLocalEmbedder(ChromaEmbeddingFunction):
+    """
+    Local-first, 100% offline deterministic embedding function compatible with ChromaDB.
     Eliminates Chroma's default remote downloading of HuggingFace models on first use.
     Produces stable 128-dimensional normalized vectors from character n-grams and tokens.
     """
     def __init__(self, dim: int = 128):
         self.dim = dim
+
+    @classmethod
+    def name(cls) -> str:
+        return "deterministic-local-embedder"
+
+    def is_legacy(self) -> bool:
+        return False
+
+    def get_config(self) -> Dict[str, Any]:
+        return {"dim": self.dim}
+
+    @classmethod
+    def build_from_config(cls, config: Dict[str, Any]) -> "DeterministicLocalEmbedder":
+        return cls(dim=config.get("dim", 128))
+
+    def default_space(self) -> str:
+        return "cosine"
+
+    def supported_spaces(self) -> List[str]:
+        return ["cosine", "l2", "ip"]
 
     def __call__(self, input: List[str]) -> List[List[float]]:
         return [self.embed_text(t) for t in input]
@@ -212,12 +273,14 @@ class SemanticMemory:
                 where_filter = {"approved": True} if only_approved else None
                 chroma_res = self.collection.query(
                     query_texts=[query],
-                    n_results=n_results,
+                    n_results=min(10, max(n_results * 2, 4)),
                     where=where_filter
                 )
                 docs = chroma_res.get("documents", [[]])[0]
                 if docs:
-                    return docs
+                    # Apply hybrid keyword reranking on retrieved Chroma candidates
+                    ranked = sorted(docs, key=lambda d: _score_hybrid(query, d, 0.6), reverse=True)
+                    return ranked[:n_results]
             except Exception as e:
                 print(f"[SemanticMemory] Chroma query fallback notice: {e}")
 
@@ -232,14 +295,15 @@ class SemanticMemory:
         if not candidates:
             return []
 
-        # Deterministic vector similarity match
+        # Deterministic vector similarity match + hybrid keyword boost
         q_vec = self.embedder.embed_text(query)
         scored = []
         for m in candidates:
             doc = m.get("document", "")
             d_vec = self.embedder.embed_text(doc)
-            sim = sum(a * b for a, b in zip(q_vec, d_vec))
-            scored.append((sim, doc))
+            cos_sim = sum(a * b for a, b in zip(q_vec, d_vec))
+            hybrid_val = _score_hybrid(query, doc, cos_sim)
+            scored.append((hybrid_val, doc))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [doc for score, doc in scored[:n_results] if score > 0.15]

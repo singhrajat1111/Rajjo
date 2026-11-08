@@ -12,17 +12,25 @@ load_dotenv()
 def get_default_data_dir() -> Path:
     env_dir = os.getenv("RAJJO_DATA_DIR")
     if env_dir:
-        path = Path(env_dir)
-    elif sys.platform == "win32":
-        app_data = os.getenv("APPDATA")
-        if app_data:
-            path = Path(app_data) / "Rajjo"
-        else:
-            path = Path.home() / ".rajjo"
-    else:
-        path = Path.home() / ".rajjo"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+        path = Path(env_dir).resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    base = Path(os.getenv("APPDATA")) / "Rajjo" if sys.platform == "win32" and os.getenv("APPDATA") else Path.home() / ".rajjo"
+    base.mkdir(parents=True, exist_ok=True)
+    cfg_file = base / "config.json"
+    if cfg_file.exists():
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                custom = saved.get("data_dir")
+                if custom:
+                    custom_path = Path(custom).resolve()
+                    custom_path.mkdir(parents=True, exist_ok=True)
+                    return custom_path
+        except Exception:
+            pass
+    return base
 
 DATA_DIR = get_default_data_dir()
 MEMORY_DIR = DATA_DIR / "memory"
@@ -164,36 +172,48 @@ def get_workspace_dir() -> Path:
     return DEFAULT_WORKSPACE_DIR
 
 # ----------------- Session Token Management -----------------
+_IN_MEMORY_SESSION_TOKEN: Optional[str] = None
+
 def get_or_create_session_token() -> str:
     """Retrieves or creates an ephemeral, cryptographically secure API bearer token."""
+    global _IN_MEMORY_SESSION_TOKEN
     import secrets
-    # 1. Check environment variable first
+    # 1. Check environment variable first (passed via Electron IPC / launch env)
     env_token = os.getenv("RAJJO_API_TOKEN")
     if env_token and len(env_token.strip()) >= 16:
         return env_token.strip()
 
-    # 2. Check local session token file
+    # 2. Check cached in-memory token
+    if _IN_MEMORY_SESSION_TOKEN:
+        return _IN_MEMORY_SESSION_TOKEN
+
+    # 3. Check local session token file
     if SESSION_TOKEN_PATH.exists():
         try:
             stored = SESSION_TOKEN_PATH.read_text(encoding="utf-8").strip()
             if len(stored) >= 32:
+                _IN_MEMORY_SESSION_TOKEN = stored
                 return stored
         except Exception:
             pass
 
-    # 3. Generate new secure 64-char hex token
+    # 4. Generate new secure 64-char hex token in memory
     new_token = secrets.token_hex(32)
-    try:
-        if sys.platform != "win32":
-            # Strict 0600 permissions on POSIX
-            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-            fd = os.open(str(SESSION_TOKEN_PATH), flags, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(new_token)
-        else:
-            SESSION_TOKEN_PATH.write_text(new_token, encoding="utf-8")
-    except Exception as e:
-        print(f"[Rajjo Config] Warning writing session token: {e}")
+    _IN_MEMORY_SESSION_TOKEN = new_token
+
+    # Persist with 0600 permissions only if RAJJO_PERSIST_TOKEN is not disabled
+    if os.getenv("RAJJO_PERSIST_TOKEN", "1") == "1":
+        try:
+            if sys.platform != "win32":
+                # Strict 0600 permissions on POSIX
+                flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                fd = os.open(str(SESSION_TOKEN_PATH), flags, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(new_token)
+            else:
+                SESSION_TOKEN_PATH.write_text(new_token, encoding="utf-8")
+        except Exception as e:
+            print(f"[Rajjo Config] Warning writing session token: {e}")
     return new_token
 
 # ----------------- Secure Secret Management (OS Keyring) -----------------
@@ -351,11 +371,6 @@ PROVIDER_CONFIGS = {
             "claude-sonnet-5-5",
             "claude-haiku-5-5",
             "claude-opus-5-5",
-            "claude-3-7-sonnet-20250219",
-            "claude-3-5-sonnet-latest",
-            "claude-3-5-haiku-latest",
-            "claude-3-opus-latest",
-            "claude-3-5-sonnet-20241022",
         ],
         "base_url": "https://api.anthropic.com/v1",
         "key_env": "ANTHROPIC_API_KEY",

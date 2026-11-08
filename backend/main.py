@@ -99,6 +99,8 @@ class ChatRequest(BaseModel):
     history: List[Dict[str, Any]] = []
     thread_id: Optional[str] = None
     model_override: Optional[Dict[str, Any]] = None
+    role_prompt: Optional[str] = None
+    role_tools: Optional[List[str]] = None
 
 class ApprovalResolutionRequest(BaseModel):
     approval_id: str
@@ -201,6 +203,7 @@ async def abort_chat(req: Optional[AbortRequest] = None):
         # Thread-scoped abort
         _aborted_threads.add(target_thread)
         approval_manager.clear_all_pending(approved=False, thread_id=target_thread)
+        process_manager.kill_thread_processes(target_thread)
         task = _active_chat_tasks.pop(target_thread, None)
         if task and not task.done():
             task.cancel()
@@ -264,7 +267,9 @@ async def agent_event_stream(request: ChatRequest):
         "activity_log": [],
         "final_output": "",
         "thread_id": thread_id,
-        "has_untrusted_content": False
+        "has_untrusted_content": False,
+        "role_prompt": request.role_prompt,
+        "role_tools": request.role_tools
     }
 
     # Set recursion_limit high enough that the graceful max_iterations path is reachable.
@@ -734,6 +739,27 @@ async def disable_mcp_server(name: str):
 
 # ----------------- Agent Multi-Agent Endpoints -----------------
 
+MAX_CONCURRENT_SUBAGENTS = 5
+
+ROLE_CONFIGS: Dict[str, Dict[str, Any]] = {
+    "coder": {
+        "prompt": "You are a specialized Coder subagent. Focus on reading, writing, testing, and debugging code with precision and high quality.",
+        "tools": ["read_file", "write_file", "run_shell_command", "view_workspace"]
+    },
+    "researcher": {
+        "prompt": "You are a specialized Researcher subagent. Focus on searching, gathering web information, inspecting documents, and synthesizing factual findings.",
+        "tools": ["web_search", "browser_navigate", "browser_click", "browser_type", "browser_scrape", "read_file", "view_workspace"]
+    },
+    "reviewer": {
+        "prompt": "You are a specialized Code & Content Reviewer subagent. Scrutinize code, plans, and output for security flaws, bugs, and edge cases without executing destructive changes.",
+        "tools": ["read_file", "view_workspace"]
+    },
+    "general": {
+        "prompt": "You are an autonomous subagent supporting the primary workflow.",
+        "tools": None
+    }
+}
+
 @app.get("/agents")
 async def list_agents():
     # Return serializable agent descriptors (omit internal task objects)
@@ -741,8 +767,18 @@ async def list_agents():
 
 @app.post("/agents/spawn")
 async def spawn_agent(req: AgentSpawnRequest):
+    active_count = sum(1 for a in _SPAWNED_AGENTS.values() if a.get("status") == "running")
+    if active_count >= MAX_CONCURRENT_SUBAGENTS:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Concurrent subagent limit reached ({MAX_CONCURRENT_SUBAGENTS}). Stop active subagents before spawning new ones."
+        )
+
     agent_id = f"agent-{os.urandom(4).hex()}"
     thread_id = thread_store.create_thread(title=f"Agent [{req.role}]: {req.task[:30]}")
+    role_key = req.role.lower()
+    role_cfg = ROLE_CONFIGS.get(role_key, ROLE_CONFIGS["general"])
+
     info = {
         "id": agent_id,
         "role": req.role,
@@ -755,7 +791,12 @@ async def spawn_agent(req: AgentSpawnRequest):
     if req.background:
         async def _run_subagent():
             try:
-                sub_req = ChatRequest(message=f"[{req.role} Task]: {req.task}", thread_id=thread_id)
+                sub_req = ChatRequest(
+                    message=f"[{req.role} Task]: {req.task}",
+                    thread_id=thread_id,
+                    role_prompt=role_cfg["prompt"],
+                    role_tools=role_cfg["tools"]
+                )
                 async for _ in agent_event_stream(sub_req):
                     pass
                 if agent_id in _SPAWNED_AGENTS:
@@ -785,6 +826,7 @@ async def stop_agent(agent_id: str):
         if tid:
             _aborted_threads.add(tid)
             approval_manager.clear_all_pending(approved=False, thread_id=tid)
+            process_manager.kill_thread_processes(tid)
         return {"success": True, "message": f"Agent {agent_id} stopped"}
     return {"success": False, "message": f"Agent {agent_id} not found"}
 

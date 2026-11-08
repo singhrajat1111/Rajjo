@@ -121,10 +121,31 @@ export const useStore = create((set, get) => ({
   isProcessing: false,
   activeActivities: [],
   pendingApproval: null,
+  pendingApprovalsList: [],
 
   setInput: (input) => set({ input }),
   setProcessing: (isProcessing) => set({ isProcessing }),
   setPendingApproval: (pendingApproval) => set({ pendingApproval }),
+  fetchApprovals: async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/chat/approvals`);
+      if (res.ok) {
+        const data = await res.json();
+        const pending = data.pending || [];
+        set({ pendingApprovalsList: pending });
+        const current = get().pendingApproval;
+        if (!current && pending.length > 0) {
+          set({ pendingApproval: pending[0] });
+        } else if (current && !pending.some((p) => p.approval_id === current.approval_id)) {
+          set({ pendingApproval: pending[0] || null });
+        }
+        return pending;
+      }
+    } catch (e) {
+      console.error('Error fetching approvals:', e);
+    }
+    return [];
+  },
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
   clearMessages: () => set({ messages: [] }),
   setActivities: (activities) => set({ activeActivities: activities }),
@@ -195,7 +216,7 @@ export const useStore = create((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ approval_id: approvalId, approved })
       });
-      set({ pendingApproval: null });
+      await get().fetchApprovals();
       return res.ok;
     } catch (e) {
       console.error('Error resolving approval:', e);

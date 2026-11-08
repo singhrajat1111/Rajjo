@@ -6,8 +6,12 @@ import json
 import re
 import threading
 import asyncio
+import contextvars
 from typing import Optional, List, Dict, Any
 from langchain_core.tools import tool
+
+# Context variable to propagate the calling thread_id to subprocess execution
+active_shell_thread: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("active_shell_thread", default=None)
 
 try:
     from backend.config import load_settings, get_workspace_dir
@@ -140,7 +144,7 @@ def get_sanitized_environment() -> Dict[str, str]:
     return env
 
 @tool
-def run_shell_command(command: str, timeout: Optional[int] = None) -> str:
+def run_shell_command(command: str, timeout: Optional[int] = None, thread_id: Optional[str] = None) -> str:
     """
     Executes a shell command with the active workspace as current working directory (cwd)
     and a sanitized environment. Commands are monitored by process tree tracking and
@@ -148,10 +152,12 @@ def run_shell_command(command: str, timeout: Optional[int] = None) -> str:
     Args:
         command: The shell command line to run.
         timeout: Execution timeout in seconds (optional, defaults to configured setting).
+        thread_id: Optional thread ID to bind process lifecycle to a specific chat session.
     """
     settings = load_settings()
     configured_timeout = timeout or settings.get("shell_timeout", 30)
     workspace_root = get_workspace_dir().resolve()
+    effective_thread = thread_id or active_shell_thread.get(None)
 
     # Approval gating is enforced centrally at the graph level (tool_executor_node)
     # via approval_manager.requires_approval(), ensuring single prompt consistency.
@@ -176,7 +182,7 @@ def run_shell_command(command: str, timeout: Optional[int] = None) -> str:
         popen_kwargs["start_new_session"] = True
     try:
         proc = subprocess.Popen(command, **popen_kwargs)
-        process_manager.register_process(proc.pid)
+        process_manager.register_process(proc.pid, thread_id=effective_thread)
 
         stdout, stderr = proc.communicate(timeout=configured_timeout)
         duration = round(time.time() - start_time, 3)

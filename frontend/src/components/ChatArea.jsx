@@ -68,6 +68,8 @@ export default function ChatArea({
     pendingApproval,
     setPendingApproval,
     resolveApproval,
+    fetchApprovals,
+    pendingApprovalsList,
   } = useStore();
   
   const [streamActivities, setStreamActivities] = useState([]);
@@ -87,6 +89,15 @@ export default function ChatArea({
   useEffect(() => {
     fetchThreads();
   }, [fetchThreads]);
+
+  useEffect(() => {
+    // Poll for pending approvals (including background subagents) periodically
+    fetchApprovals?.();
+    const interval = setInterval(() => {
+      fetchApprovals?.();
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [fetchApprovals]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -136,7 +147,11 @@ export default function ChatArea({
       abortControllerRef.current = null;
     }
     try {
-      await authFetch('http://127.0.0.1:8000/chat/abort', { method: 'POST' });
+      await authFetch('/chat/abort', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ thread_id: activeThreadId || undefined })
+      });
     } catch (e) {
       console.error('Abort request failed:', e);
     }
@@ -151,7 +166,7 @@ export default function ChatArea({
     setStreamActivities([]);
     setLiveAgentMessage('');
     if (setLiveStreamMsg) setLiveStreamMsg('');
-  }, [addMessage, setProcessing, setLiveStreamMsg, setPendingApproval]);
+  }, [addMessage, setProcessing, setLiveStreamMsg, setPendingApproval, activeThreadId]);
 
   useEffect(() => {
     if (onAbortTaskRef) {
@@ -495,11 +510,21 @@ export default function ChatArea({
               </div>
               <div className="flex-1 space-y-2">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="font-bold text-sm text-[var(--fg-primary)]">Human-in-the-Loop Approval Required</h3>
                     <span className="badge bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] uppercase font-mono px-2 py-0.5 rounded font-bold">
                       {pendingApproval.risk_level || 'HIGH RISK'}
                     </span>
+                    {pendingApproval.thread_id && pendingApproval.thread_id !== activeThreadId && (
+                      <span className="badge bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] uppercase font-mono px-2 py-0.5 rounded font-bold">
+                        Subagent Task
+                      </span>
+                    )}
+                    {pendingApprovalsList && pendingApprovalsList.length > 1 && (
+                      <span className="text-[10px] text-amber-300 font-mono">
+                        ({pendingApprovalsList.length} actions pending)
+                      </span>
+                    )}
                   </div>
                   <span className="text-[11px] text-[var(--fg-muted)] font-mono">ID: {pendingApproval.approval_id?.slice(0, 8)}</span>
                 </div>

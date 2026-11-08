@@ -23,13 +23,28 @@ class ProcessManager:
     """
     def __init__(self):
         self._active_pids: Set[int] = set()
+        self._thread_pids: Dict[str, Set[int]] = {}
         self._abort_requested: bool = False
 
-    def register_process(self, pid: int):
+    def register_process(self, pid: int, thread_id: Optional[str] = None):
         self._active_pids.add(pid)
+        if thread_id:
+            self._thread_pids.setdefault(thread_id, set()).add(pid)
 
     def unregister_process(self, pid: int):
         self._active_pids.discard(pid)
+        for t_pids in self._thread_pids.values():
+            t_pids.discard(pid)
+
+    def kill_thread_processes(self, thread_id: str) -> Set[int]:
+        """Kill all registered active process trees for a specific thread."""
+        if not thread_id:
+            return set()
+        pids = set(self._thread_pids.get(thread_id, set()))
+        for pid in pids:
+            self.kill_process_tree(pid)
+        self._thread_pids.pop(thread_id, None)
+        return pids
 
     def kill_process_tree(self, pid: int):
         if not pid:
@@ -45,6 +60,10 @@ class ProcessManager:
                 )
             except Exception as e:
                 print(f"[ProcessManager] Error running taskkill on {pid}: {e}")
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
         else:
             try:
                 pgid = os.getpgid(pid)
