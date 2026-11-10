@@ -63,11 +63,11 @@ import {
   Link2,
   Sparkles,
 } from 'lucide-react';
-import { useStore } from '../store/useStore';
+import { useStore, authFetch } from '../store/useStore';
 import { cn, formatBytes } from '../lib/utils';
 import ProviderCards from './model-manager/ProviderCards';
 import ActiveModelSummary from './model-manager/ActiveModelSummary';
-import GGUFConfigSection from './model-manager/GGUFConfigSection';
+import NvidiaConfigSection from './model-manager/NvidiaConfigSection';
 
 export default function ModelManager() {
   const {
@@ -76,7 +76,7 @@ export default function ModelManager() {
     selectModel,
     testModelConnection,
     detectOllama,
-    validateGGUFPath,
+    fetchNvidiaModels,
   } = useStore();
 
   const [provider, setProvider] = useState(modelsData?.active_provider || 'universal');
@@ -84,8 +84,7 @@ export default function ModelManager() {
   const [apiKey, setApiKey] = useState('');
   const [customBaseUrl, setCustomBaseUrl] = useState(modelsData?.custom_base_url || '');
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState(modelsData?.ollama_base_url || 'http://localhost:11434');
-  const [ggufPath, setGgufPath] = useState(modelsData?.gguf?.model_path || '');
-  const [ggufValidation, setGgufValidation] = useState(modelsData?.gguf?.info || null);
+  const [nvidiaBaseUrl, setNvidiaBaseUrl] = useState(modelsData?.nvidia_base_url || 'https://integrate.api.nvidia.com/v1');
   const [testResult, setTestResult] = useState(null);
   const [isTesting, setIsTesting] = useState(false);
   const [isScanningOllama, setIsScanningOllama] = useState(false);
@@ -100,38 +99,6 @@ export default function ModelManager() {
   useEffect(() => {
     fetchModels();
   }, [fetchModels]);
-
-  const handleProviderSelect = useCallback((newProvider) => {
-    setProvider(newProvider);
-    setTestResult(null);
-    if (newProvider === 'ollama') {
-      if (modelsData?.ollama?.models?.length > 0) {
-        if (!modelsData.ollama.models.includes(modelId) || modelId === 'gpt-4o') {
-          setModelId(modelsData.ollama.models[0]);
-        }
-      } else {
-        setModelId('llama3.2');
-      }
-    } else if (newProvider === 'groq') {
-      if (!modelId.includes('llama') && !modelId.includes('mixtral') && !modelId.includes('gemma')) {
-        setModelId('llama-3.3-70b-versatile');
-      }
-    } else if (newProvider === 'openai') {
-      if (!modelId.startsWith('gpt-') && !modelId.startsWith('o1') && !modelId.startsWith('o3')) {
-        setModelId('gpt-4o');
-      }
-    } else if (newProvider === 'universal' || newProvider === 'custom') {
-      if (!modelId || modelId === 'gpt-4o') {
-        setModelId('deepseek-chat');
-      }
-    } else if (newProvider === 'anthropic') {
-      setModelId('claude-3-7-sonnet');
-    } else if (newProvider === 'gemini') {
-      setModelId('gemini-2.0-flash');
-    } else if (newProvider === 'openrouter') {
-      setModelId('anthropic/claude-3.7-sonnet');
-    }
-  }, [modelId, modelsData]);
 
   const handleScanOllama = useCallback(async () => {
     setIsScanningOllama(true);
@@ -151,6 +118,53 @@ export default function ModelManager() {
       setIsScanningOllama(false);
     }
   }, [detectOllama, ollamaBaseUrl]);
+
+  const handleProviderSelect = useCallback((newProvider) => {
+    setProvider(newProvider);
+    setTestResult(null);
+    if (newProvider === 'ollama') {
+      if (modelsData?.ollama?.models?.length > 0) {
+        if (!modelsData.ollama.models.includes(modelId) || modelId === 'gpt-4o') {
+          setModelId(modelsData.ollama.models[0]);
+        }
+      } else {
+        setModelId('llama3.2');
+      }
+      // Automatically scan live Ollama instance when user selects Local Ollama
+      setTimeout(() => {
+        detectOllama(ollamaBaseUrl).then((data) => {
+          if (data?.models?.length > 0) {
+            setOllamaScanStatus(`Found ${data.models.length} local models: ${data.models.join(', ')}`);
+            setModelId(data.models[0]);
+          } else if (data?.running) {
+            setOllamaScanStatus('Ollama is running, but no models have been pulled yet.');
+          } else if (data?.message) {
+            setOllamaScanStatus(data.message);
+          }
+        });
+      }, 0);
+    } else if (newProvider === 'groq') {
+      if (!modelId.includes('llama') && !modelId.includes('mixtral') && !modelId.includes('gemma')) {
+        setModelId('llama-3.3-70b-versatile');
+      }
+    } else if (newProvider === 'openai') {
+      if (!modelId.startsWith('gpt-') && !modelId.startsWith('o1') && !modelId.startsWith('o3')) {
+        setModelId('gpt-4o');
+      }
+    } else if (newProvider === 'universal' || newProvider === 'custom') {
+      if (!modelId || modelId === 'gpt-4o') {
+        setModelId('deepseek-chat');
+      }
+    } else if (newProvider === 'anthropic') {
+      setModelId('claude-sonnet-5-5');
+    } else if (newProvider === 'gemini') {
+      setModelId('gemini-2.0-flash');
+    } else if (newProvider === 'openrouter') {
+      setModelId('anthropic/claude-3.7-sonnet');
+    } else if (newProvider === 'nvidia') {
+      setModelId('nvidia/nemotron-3.5-lightning-30b-a3b');
+    }
+  }, [modelId, modelsData, detectOllama, ollamaBaseUrl]);
 
   const handleScanOllamaCloud = useCallback(async () => {
     setIsScanningCloud(true);
@@ -172,17 +186,6 @@ export default function ModelManager() {
     }
   }, []);
 
-  const handleSelectGGUF = useCallback(async () => {
-    if (window.electronAPI?.selectGGUFFile) {
-      const selected = await window.electronAPI.selectGGUFFile();
-      if (selected) {
-        setGgufPath(selected);
-        const info = await validateGGUFPath(selected);
-        setGgufValidation(info);
-      }
-    }
-  }, [validateGGUFPath]);
-
   const getEffectiveModelId = useCallback(() => {
     if (provider === 'ollama') {
       if (modelsData?.ollama?.models?.length > 0) {
@@ -192,11 +195,11 @@ export default function ModelManager() {
     }
     if (provider === 'openai') return modelId || 'gpt-4o';
     if (provider === 'groq') return modelId || 'llama-3.3-70b-versatile';
-    if (provider === 'anthropic') return modelId || 'claude-3-7-sonnet';
+    if (provider === 'anthropic') return modelId || 'claude-sonnet-5-5';
     if (provider === 'gemini') return modelId || 'gemini-2.0-flash';
     if (provider === 'openrouter') return modelId || 'anthropic/claude-3.7-sonnet';
     if (provider === 'universal' || provider === 'custom') return modelId || 'deepseek-chat';
-    if (provider === 'gguf') return 'rajjo-direct-gguf';
+    if (provider === 'nvidia') return modelId || 'nvidia/nemotron-3.5-lightning-30b-a3b';
     return modelId;
   }, [provider, modelId, modelsData]);
 
@@ -208,7 +211,7 @@ export default function ModelManager() {
       model_id: effectiveModel,
       custom_base_url: customBaseUrl,
       ollama_base_url: ollamaBaseUrl,
-      gguf_model_path: ggufPath,
+      nvidia_base_url: nvidiaBaseUrl,
       api_key: apiKey || undefined
     };
     const ok = await selectModel(payload);
@@ -217,33 +220,36 @@ export default function ModelManager() {
       setTestResult({ success: true, message: `Model successfully activated: ${provider.toUpperCase()} (${effectiveModel})` });
     }
     setIsSaving(false);
-  }, [provider, getEffectiveModelId, customBaseUrl, ollamaBaseUrl, ggufPath, apiKey, selectModel]);
+  }, [provider, getEffectiveModelId, customBaseUrl, ollamaBaseUrl, nvidiaBaseUrl, apiKey, selectModel]);
 
   const handleTest = useCallback(async () => {
     setIsTesting(true);
     setTestResult(null);
     const effectiveModel = getEffectiveModelId();
+    let effectiveBaseUrl = customBaseUrl;
+    if (provider === 'ollama') effectiveBaseUrl = ollamaBaseUrl;
+    else if (provider === 'nvidia') effectiveBaseUrl = nvidiaBaseUrl;
+
     const payload = {
       provider,
       model_id: effectiveModel,
-      base_url: customBaseUrl || ollamaBaseUrl,
-      gguf_model_path: ggufPath,
+      base_url: effectiveBaseUrl,
       api_key: apiKey || undefined
     };
     const res = await testModelConnection(payload);
     setTestResult(res);
     setIsTesting(false);
-  }, [provider, getEffectiveModelId, customBaseUrl, ollamaBaseUrl, ggufPath, apiKey, testModelConnection]);
+  }, [provider, getEffectiveModelId, customBaseUrl, ollamaBaseUrl, nvidiaBaseUrl, apiKey, testModelConnection]);
 
   const providerOptions = [
     { id: 'universal', label: 'Universal API', desc: 'DeepSeek-V3/R1, Qwen & OpenAI-compatible', icon: Globe, color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/30' },
     { id: 'openai', label: 'OpenAI', desc: 'GPT-4o, o3-mini, o1', icon: Brain, color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/30' },
-    { id: 'anthropic', label: 'Anthropic', desc: 'Claude 3.7 Sonnet & 3.5 Haiku', icon: Sparkles, color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/30' },
+    { id: 'anthropic', label: 'Anthropic', desc: 'Claude Sonnet & Haiku 5.5', icon: Sparkles, color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/30' },
     { id: 'groq', label: 'Groq', desc: 'Ultra-fast Llama 3.3 & DeepSeek-R1', icon: Zap, color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30' },
     { id: 'gemini', label: 'Google Gemini', desc: 'Gemini 2.0 Flash & Pro', icon: Cpu, color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30' },
     { id: 'openrouter', label: 'OpenRouter', desc: '100+ models, one unified API', icon: Network, color: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/30' },
     { id: 'ollama', label: 'Local Ollama', desc: 'Installed local models', icon: HardDrive, color: 'text-[var(--brand-400)]', bg: 'bg-cyan-500/10', border: 'border-cyan-500/30' },
-    { id: 'gguf', label: 'Direct GGUF', desc: 'Run any .gguf file directly', icon: Database, color: 'text-[var(--accent-400)]', bg: 'bg-amber-500/10', border: 'border-amber-500/30' },
+    { id: 'nvidia', label: 'NVIDIA NIM', desc: 'NIM Cloud & Self-Hosted API', icon: Cpu, color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30' },
   ];
 
   return (
@@ -259,11 +265,18 @@ export default function ModelManager() {
             Model Manager & Engine Router
           </h2>
           <p className="text-[var(--fg-muted)] text-sm mt-1">
-            Switch dynamically between Cloud APIs, local Ollama, Ollama Cloud library, Universal endpoints, and Direct GGUF inference
+            Switch dynamically between Cloud APIs, NVIDIA NIM, local Ollama, Ollama Cloud library, and Universal endpoints
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="btn btn-ghost btn-sm gap-2" title="Refresh all models">
+          <button
+            onClick={() => {
+              fetchModels();
+              if (provider === 'ollama') handleScanOllama();
+            }}
+            className="btn btn-ghost btn-sm gap-2"
+            title="Refresh all models"
+          >
             <RefreshCw size={16} className={isScanningOllama ? 'animate-spin' : ''} />
             Refresh
           </button>
@@ -634,6 +647,17 @@ export default function ModelManager() {
               </motion.p>
             )}
 
+            {/* Ollama Base URL */}
+            <div>
+              <label className="block text-xs text-[var(--fg-muted)] mb-1">Ollama Server URL</label>
+              <input
+                value={ollamaBaseUrl}
+                onChange={e => setOllamaBaseUrl(e.target.value)}
+                placeholder="http://localhost:11434"
+                className="input font-mono text-sm"
+              />
+            </div>
+
             {/* Local Models Dropdown */}
             <div>
               <label className="block text-xs text-[var(--fg-muted)] mb-1">Select Installed Local Model</label>
@@ -695,14 +719,19 @@ export default function ModelManager() {
           </div>
         )}
 
-        {/* Direct GGUF */}
-        {provider === 'gguf' && (
-          <GGUFConfigSection
-            ggufPath={ggufPath}
-            setGgufPath={setGgufPath}
-            ggufValidation={ggufValidation}
-            setGgufValidation={setGgufValidation}
-            validateGGUFPath={validateGGUFPath}
+        {/* NVIDIA NIM */}
+        {provider === 'nvidia' && (
+          <NvidiaConfigSection
+            modelId={modelId}
+            setModelId={setModelId}
+            apiKey={apiKey}
+            setApiKey={setApiKey}
+            showApiKey={showApiKey}
+            setShowApiKey={setShowApiKey}
+            nvidiaBaseUrl={nvidiaBaseUrl}
+            setNvidiaBaseUrl={setNvidiaBaseUrl}
+            modelsData={modelsData}
+            fetchNvidiaModels={fetchNvidiaModels}
           />
         )}
 

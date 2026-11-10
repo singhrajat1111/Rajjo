@@ -69,7 +69,17 @@ export async function authFetch(url, options = {}) {
     finalUrl = url.replace(/^http:\/\/(127\.0\.0\.1|localhost):8000/, base);
   }
 
-  return fetch(finalUrl, { ...options, headers });
+  const res = await fetch(finalUrl, { ...options, headers });
+  if (res.status === 401) {
+    cachedApiToken = null;
+    const freshToken = await getApiToken();
+    if (freshToken && freshToken !== token) {
+      headers.set('Authorization', `Bearer ${freshToken}`);
+      headers.set('X-Rajjo-Token', freshToken);
+      return fetch(finalUrl, { ...options, headers });
+    }
+  }
+  return res;
 }
 
 export const useStore = create((set, get) => ({
@@ -81,15 +91,15 @@ export const useStore = create((set, get) => ({
   sidebarOpen: true,
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
-  
+
   commandPaletteOpen: false,
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
-  
+
   theme: (typeof window !== 'undefined' && localStorage.getItem('rajjo_theme')) || 'dark', // 'dark' | 'light' | 'system'
   setTheme: (theme) => {
     try {
       if (typeof window !== 'undefined') localStorage.setItem('rajjo_theme', theme);
-    } catch (_) {}
+    } catch (_) { }
     set({ theme });
   },
 
@@ -231,8 +241,9 @@ export const useStore = create((set, get) => ({
     active_model_id: 'deepseek-chat',
     custom_base_url: '',
     ollama_base_url: 'http://localhost:11434',
+    nvidia_base_url: 'https://integrate.api.nvidia.com/v1',
     ollama: { running: false, models: [] },
-    gguf: { model_path: '', info: null },
+    nvidia: { base_url: 'https://integrate.api.nvidia.com/v1', configured: false, models: [] },
     credentials: {}
   },
   isLoadingModels: false,
@@ -272,12 +283,35 @@ export const useStore = create((set, get) => ({
       const res = await authFetch(`${API_BASE}/models/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(60000)
       });
       return await res.json();
     } catch (e) {
-      return { success: false, message: e.message };
+      return { success: false, message: e.name === 'TimeoutError' ? 'Connection test timed out after 60s.' : e.message };
     }
+  },
+  fetchNvidiaModels: async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/models/nvidia`);
+      if (res.ok) {
+        const data = await res.json();
+        const models = data.models || [];
+        set((state) => ({
+          modelsData: {
+            ...state.modelsData,
+            nvidia: {
+              ...state.modelsData.nvidia,
+              models
+            }
+          }
+        }));
+        return models;
+      }
+    } catch (e) {
+      console.error('Error fetching NVIDIA NIM models:', e);
+    }
+    return [];
   },
   detectOllama: async (baseUrl = 'http://localhost:11434') => {
     try {
@@ -290,16 +324,18 @@ export const useStore = create((set, get) => ({
             ollama: {
               ...state.modelsData.ollama,
               running: data.running,
-              models: data.models
+              models: data.models || [],
+              message: data.message
             }
           }
         }));
         return data;
       }
+      return { running: false, models: [], message: `Backend returned HTTP ${res.status}` };
     } catch (e) {
       console.error('Error detecting Ollama:', e);
+      return { running: false, models: [], message: e.message || 'Failed to reach Rajjo backend' };
     }
-    return { running: false, models: [] };
   },
   validateGGUFPath: async (path) => {
     try {

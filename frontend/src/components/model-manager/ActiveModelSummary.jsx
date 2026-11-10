@@ -32,13 +32,15 @@ export default function ActiveModelSummary({ modelsData }) {
         <div className="p-3 bg-[var(--bg-input)] rounded-xl">
           <div className="text-xs text-[var(--fg-muted)]">Endpoint</div>
           <div className="font-mono text-[var(--fg-secondary)] truncate">
-            {modelsData.custom_base_url || (modelsData.ollama?.running ? 'Local Ollama' : 'Default')}
+            {modelsData.active_provider === 'nvidia'
+              ? (modelsData.nvidia_base_url || 'https://integrate.api.nvidia.com/v1')
+              : (modelsData.custom_base_url || (modelsData.ollama?.running ? 'Local Ollama' : 'Default'))}
           </div>
         </div>
         <div className="p-3 bg-[var(--bg-input)] rounded-xl">
-          <div className="text-xs text-[var(--fg-muted)]">GGUF Engine</div>
+          <div className="text-xs text-[var(--fg-muted)]">NVIDIA NIM</div>
           <div className="font-mono text-[var(--fg-secondary)]">
-            {modelsData.gguf?.model_path ? 'Loaded' : 'Not configured'}
+            {modelsData.credentials?.nvidia?.configured ? 'Key Configured' : 'Not configured'}
           </div>
         </div>
       </div>

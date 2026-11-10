@@ -75,6 +75,7 @@ DEFAULT_SETTINGS = {
     "active_model_id": os.getenv("RAJJO_DEFAULT_MODEL", "deepseek-chat"),
     "custom_base_url": "",
     "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+    "nvidia_base_url": os.getenv("RAJJO_NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
     "gguf_model_path": os.getenv("RAJJO_GGUF_MODEL_PATH", ""),
     "data_dir": str(DATA_DIR),
     "workspace_dir": str(DEFAULT_WORKSPACE_DIR),
@@ -363,6 +364,7 @@ def get_masked_secrets_summary() -> dict:
     custom_key = get_secret("CUSTOM_API_KEY")
     gemini_key = get_secret("GEMINI_API_KEY")
     openrouter_key = get_secret("OPENROUTER_API_KEY")
+    nvidia_key = get_secret("NVIDIA_API_KEY")
 
     return {
         "openai": {"configured": bool(openai_key), "masked": mask_key(openai_key)},
@@ -371,6 +373,7 @@ def get_masked_secrets_summary() -> dict:
         "custom": {"configured": bool(custom_key), "masked": mask_key(custom_key)},
         "gemini": {"configured": bool(gemini_key), "masked": mask_key(gemini_key)},
         "openrouter": {"configured": bool(openrouter_key), "masked": mask_key(openrouter_key)},
+        "nvidia": {"configured": bool(nvidia_key), "masked": mask_key(nvidia_key)},
     }
 
 # Provider configurations
@@ -471,13 +474,22 @@ PROVIDER_CONFIGS = {
         "key_env": "",
         "key_secret": "",
     },
-    "gguf": {
-        "name": "Direct GGUF",
-        "default_model": "rajjo-direct-gguf",
-        "models": [],
-        "base_url": "",
-        "key_env": "",
-        "key_secret": "",
+    "nvidia": {
+        "name": "NVIDIA NIM",
+        "default_model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "models": [
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
+            "nvidia/nemotron-3.5-bolt-e4b",
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+            "deepseek-ai/deepseek-v4.1-flash",
+            "z-ai/glm-5.3-flash",
+            "mistralai/mistral-large-4-1t-a52b",
+            "moonshotai/kimi-k2.6",
+            "minimaxai/minimax-m3.1-flash",
+        ],
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "key_env": "NVIDIA_API_KEY",
+        "key_secret": "NVIDIA_API_KEY",
     },
 }
 

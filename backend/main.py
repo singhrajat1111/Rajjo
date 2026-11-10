@@ -39,34 +39,21 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 app = FastAPI(title="Rajjo Backend", version="2.0.0")
 
-# Restrict CORS to trusted local origins
-ALLOWED_CORS_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:4173",
-    "http://127.0.0.1:4173",
-    "null",
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_CORS_ORIGINS,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
-    allow_headers=["*"],
-)
-
 @app.on_event("startup")
 async def on_startup():
     apply_proxy_settings()
+    # Ensure session token is initialized on startup (important for dev-mode sibling Electron discovery)
+    try:
+        get_or_create_session_token()
+    except Exception as e:
+        print(f"[Rajjo Startup] Token init notice: {e}")
     # Initialize configured MCP servers in background
     try:
         mcp_manager.initialize_configured_servers()
     except Exception as e:
         print(f"[Rajjo Startup] MCP init notice: {e}")
 
-# Authentication Middleware
+# Authentication Middleware (registered before CORSMiddleware so CORS wraps 401 responses too)
 @app.middleware("http")
 async def authenticate_request(request: Request, call_next):
     if request.method == "OPTIONS" or request.url.path in ("/health", "/health/"):
@@ -87,6 +74,24 @@ async def authenticate_request(request: Request, call_next):
         )
 
     return await call_next(request)
+
+# Restrict CORS to trusted local origins (added last so it wraps all responses outermost)
+ALLOWED_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "null",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_CORS_ORIGINS,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
+    allow_headers=["*"],
+)
 
 # Global cancellation token and active tasks
 _abort_requested = False
@@ -118,6 +123,7 @@ class ModelSelectRequest(BaseModel):
     model_id: Optional[str] = None
     custom_base_url: Optional[str] = None
     ollama_base_url: Optional[str] = None
+    nvidia_base_url: Optional[str] = None
     gguf_model_path: Optional[str] = None
     api_key: Optional[str] = None
 
@@ -134,6 +140,7 @@ class SettingsUpdateRequest(BaseModel):
     active_model_id: Optional[str] = None
     custom_base_url: Optional[str] = None
     ollama_base_url: Optional[str] = None
+    nvidia_base_url: Optional[str] = None
     gguf_model_path: Optional[str] = None
     workspace_dir: Optional[str] = None
     data_dir: Optional[str] = None
@@ -150,6 +157,7 @@ class SettingsUpdateRequest(BaseModel):
     custom_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
+    nvidia_api_key: Optional[str] = None
 
 class MCPServerRequest(BaseModel):
     name: str
@@ -492,18 +500,21 @@ async def update_thread_title(thread_id: str, req: ThreadTitleUpdateRequest):
 async def get_models():
     settings = load_settings()
     active_prov = settings.get("active_provider", "universal")
-    ollama_running, ollama_models, ollama_msg = ModelRouter.detect_ollama(settings.get("ollama_base_url", "http://localhost:11434"))
+    ollama_running, ollama_models, ollama_msg = await asyncio.to_thread(
+        ModelRouter.detect_ollama, settings.get("ollama_base_url", "http://localhost:11434")
+    )
     secrets_summary = get_masked_secrets_summary()
     providers = get_all_providers()
 
     # Dynamic models for active provider
-    dynamic_models = ModelRouter.fetch_dynamic_provider_models(active_prov)
+    dynamic_models = await asyncio.to_thread(ModelRouter.fetch_dynamic_provider_models, active_prov)
 
     return {
         "active_provider": active_prov,
         "active_model_id": settings.get("active_model_id", "deepseek-chat"),
         "custom_base_url": settings.get("custom_base_url", ""),
         "ollama_base_url": settings.get("ollama_base_url", "http://localhost:11434"),
+        "nvidia_base_url": settings.get("nvidia_base_url", "https://integrate.api.nvidia.com/v1"),
         "models": dynamic_models,
         "ollama": {
             "running": ollama_running,
@@ -511,9 +522,10 @@ async def get_models():
             "message": ollama_msg,
             "base_url": settings.get("ollama_base_url", "http://localhost:11434")
         },
-        "gguf": {
-            "model_path": settings.get("gguf_model_path", ""),
-            "info": ModelRouter.validate_gguf(settings.get("gguf_model_path", "")) if settings.get("gguf_model_path") else None
+        "nvidia": {
+            "base_url": settings.get("nvidia_base_url", "https://integrate.api.nvidia.com/v1"),
+            "configured": bool(secrets_summary.get("nvidia", {}).get("configured")),
+            "models": PROVIDER_CONFIGS.get("nvidia", {}).get("models", [])
         },
         "credentials": secrets_summary,
         "providers": providers
@@ -533,17 +545,20 @@ async def select_model(req: ModelSelectRequest):
         elif req.provider == "openai":
             model_id = "gpt-4o"
         elif req.provider == "anthropic":
-            model_id = "claude-3-5-sonnet-20241022"
+            model_id = "claude-sonnet-5-5"
         elif req.provider == "gemini":
             model_id = "gemini-2.0-flash"
         elif req.provider == "openrouter":
             model_id = "anthropic/claude-3.7-sonnet"
+        elif req.provider in ("nvidia", "nvidia_nim", "nim"):
+            model_id = "nvidia/nemotron-3.5-lightning-30b-a3b"
         else:
             model_id = "deepseek-chat"
 
     if model_id: updates["active_model_id"] = model_id
     if req.custom_base_url is not None: updates["custom_base_url"] = req.custom_base_url
     if req.ollama_base_url is not None: updates["ollama_base_url"] = req.ollama_base_url
+    if req.nvidia_base_url is not None: updates["nvidia_base_url"] = req.nvidia_base_url
     if req.gguf_model_path is not None: updates["gguf_model_path"] = req.gguf_model_path
 
     if req.api_key:
@@ -552,6 +567,7 @@ async def select_model(req: ModelSelectRequest):
         elif req.provider == "anthropic": save_secret("ANTHROPIC_API_KEY", req.api_key)
         elif req.provider == "gemini": save_secret("GEMINI_API_KEY", req.api_key)
         elif req.provider == "openrouter": save_secret("OPENROUTER_API_KEY", req.api_key)
+        elif req.provider in ("nvidia", "nvidia_nim", "nim"): save_secret("NVIDIA_API_KEY", req.api_key)
         else: save_secret("CUSTOM_API_KEY", req.api_key)
 
     saved = save_settings(updates)
@@ -559,14 +575,21 @@ async def select_model(req: ModelSelectRequest):
 
 @app.post("/models/test")
 async def test_model(req: Dict[str, Any]):
-    success, msg = ModelRouter.test_connection(req)
+    # Run synchronous LLM test in worker thread so /health & SSE never freeze
+    success, msg = await asyncio.to_thread(ModelRouter.test_connection, req)
     return {"success": success, "message": msg}
 
+@app.get("/models/nvidia")
+async def get_nvidia_models():
+    models = await asyncio.to_thread(ModelRouter.fetch_dynamic_provider_models, "nvidia")
+    return {"models": models, "count": len(models)}
+
 @app.get("/models/ollama")
-async def get_ollama_status():
+async def get_ollama_status(base_url: Optional[str] = None):
     settings = load_settings()
-    running, models, msg = ModelRouter.detect_ollama(settings.get("ollama_base_url", "http://localhost:11434"))
-    return {"running": running, "models": models, "message": msg}
+    target_url = base_url.strip() if base_url and base_url.strip() else settings.get("ollama_base_url", "http://localhost:11434")
+    running, models, msg = await asyncio.to_thread(ModelRouter.detect_ollama, target_url)
+    return {"running": running, "models": models, "message": msg, "base_url": target_url}
 
 @app.post("/models/validate-gguf")
 async def validate_gguf_endpoint(req: Dict[str, str]):
@@ -679,6 +702,7 @@ async def update_settings_endpoint(req: SettingsUpdateRequest):
     if req.active_model_id is not None: updates["active_model_id"] = req.active_model_id
     if req.custom_base_url is not None: updates["custom_base_url"] = req.custom_base_url
     if req.ollama_base_url is not None: updates["ollama_base_url"] = req.ollama_base_url
+    if req.nvidia_base_url is not None: updates["nvidia_base_url"] = req.nvidia_base_url
     if req.gguf_model_path is not None: updates["gguf_model_path"] = req.gguf_model_path
     if req.workspace_dir is not None:
         p = Path(req.workspace_dir).resolve()
@@ -704,6 +728,7 @@ async def update_settings_endpoint(req: SettingsUpdateRequest):
     if req.custom_api_key: save_secret("CUSTOM_API_KEY", req.custom_api_key)
     if req.gemini_api_key: save_secret("GEMINI_API_KEY", req.gemini_api_key)
     if req.openrouter_api_key: save_secret("OPENROUTER_API_KEY", req.openrouter_api_key)
+    if req.nvidia_api_key: save_secret("NVIDIA_API_KEY", req.nvidia_api_key)
 
     saved = save_settings(updates)
     apply_proxy_settings(saved)

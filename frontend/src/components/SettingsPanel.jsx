@@ -43,6 +43,7 @@ export default function SettingsPanel() {
   const [customKey, setCustomKey] = useState('');
   const [geminiKey, setGeminiKey] = useState('');
   const [openrouterKey, setOpenrouterKey] = useState('');
+  const [nvidiaKey, setNvidiaKey] = useState('');
 
   const [workspaceDir, setWorkspaceDir] = useState('');
   const [dataDir, setDataDir] = useState('');
@@ -62,6 +63,7 @@ export default function SettingsPanel() {
   const [showCustomKey, setShowCustomKey] = useState(false);
   const [showGeminiKey, setShowGeminiKey] = useState(false);
   const [showOpenrouterKey, setShowOpenrouterKey] = useState(false);
+  const [showNvidiaKey, setShowNvidiaKey] = useState(false);
 
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -112,6 +114,7 @@ export default function SettingsPanel() {
       custom_api_key: customKey || undefined,
       gemini_api_key: geminiKey || undefined,
       openrouter_api_key: openrouterKey || undefined,
+      nvidia_api_key: nvidiaKey || undefined,
     };
     const ok = await updateSettings(updates);
     if (ok) {
@@ -122,6 +125,7 @@ export default function SettingsPanel() {
       setCustomKey('');
       setGeminiKey('');
       setOpenrouterKey('');
+      setNvidiaKey('');
       setTimeout(() => setSaveSuccess(false), 3000);
     }
     setIsSaving(false);
@@ -129,7 +133,7 @@ export default function SettingsPanel() {
     shellTimeout, maxIterations, workspaceDir, dataDir,
     shellConfirmDestructive, autoSaveConversations,
     httpProxy, httpsProxy, noProxy, theme,
-    openaiKey, groqKey, anthropicKey, customKey, geminiKey, openrouterKey,
+    openaiKey, groqKey, anthropicKey, customKey, geminiKey, openrouterKey, nvidiaKey,
     updateSettings
   ]);
 
@@ -279,6 +283,17 @@ export default function SettingsPanel() {
                 configured={settingsData?.credentials?.openrouter?.configured}
                 icon={<Network size={18} className="text-purple-400" />}
                 helpText="Access 100+ models via openrouter.ai"
+              />
+              <CredentialField
+                label="NVIDIA NIM API Key"
+                placeholder="nvapi-..."
+                value={nvidiaKey}
+                onChange={setNvidiaKey}
+                show={showNvidiaKey}
+                onToggleShow={setShowNvidiaKey}
+                configured={settingsData?.credentials?.nvidia?.configured}
+                icon={<Cpu size={18} className="text-emerald-400" />}
+                helpText="NVIDIA NIM models via build.nvidia.com (Llama 3.3, Nemotron, DeepSeek-R1)"
               />
               <CredentialField
                 label="Universal / Custom API Key"

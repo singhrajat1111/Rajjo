@@ -13,10 +13,11 @@ let pythonProcess = null;
 let backendPort = 8000;
 let backendBaseUrl = 'http://127.0.0.1:8000';
 let isShuttingDown = false;
+let attachedExternalBackend = false;
 
 // ----------------- Data Directory & Logging -----------------
 
-function getDataDir() {
+function getBaseDataDir() {
   if (process.env.RAJJO_DATA_DIR && process.env.RAJJO_DATA_DIR.trim()) {
     return path.resolve(process.env.RAJJO_DATA_DIR.trim());
   }
@@ -24,6 +25,22 @@ function getDataDir() {
     return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Rajjo');
   }
   return path.join(os.homedir(), '.rajjo');
+}
+
+function getDataDir() {
+  const base = getBaseDataDir();
+  try {
+    const cfgFile = path.join(base, 'config.json');
+    if (fs.existsSync(cfgFile)) {
+      const saved = JSON.parse(fs.readFileSync(cfgFile, 'utf-8'));
+      if (saved && saved.data_dir) {
+        return path.resolve(saved.data_dir);
+      }
+    }
+  } catch (e) {
+    // Fallback to base
+  }
+  return base;
 }
 
 function getLogFile() {
@@ -61,6 +78,28 @@ function getOrCreateApiToken() {
   if (process.env.RAJJO_API_TOKEN && process.env.RAJJO_API_TOKEN.trim()) {
     inMemorySessionToken = process.env.RAJJO_API_TOKEN.trim();
     return inMemorySessionToken;
+  }
+
+  // In dev mode when attaching to an externally launched backend (e.g. npm run dev),
+  // read the sibling backend's session token so auth headers match.
+  if (attachedExternalBackend) {
+    const candidateTokenFiles = [
+      path.join(getDataDir(), '.session_token'),
+      path.join(getBaseDataDir(), '.session_token'),
+    ];
+    for (const tokenFile of candidateTokenFiles) {
+      try {
+        if (fs.existsSync(tokenFile)) {
+          const stored = fs.readFileSync(tokenFile, 'utf-8').trim();
+          if (stored.length >= 16) {
+            inMemorySessionToken = stored;
+            return inMemorySessionToken;
+          }
+        }
+      } catch (e) {
+        log('error', 'Error reading external backend session token', e);
+      }
+    }
   }
 
   // Generate ephemeral in-memory 64-char hex token (RAM only, no disk write)
@@ -387,6 +426,7 @@ app.whenReady().then(async () => {
     const is8000Healthy = await checkBackendHealth(8000, 2, 200);
     if (is8000Healthy) {
       log('info', 'Existing backend service detected on port 8000 in dev mode');
+      attachedExternalBackend = true;
       chosenPort = 8000;
     } else {
       chosenPort = await findAvailablePort(8000, 30);

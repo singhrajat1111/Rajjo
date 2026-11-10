@@ -669,5 +669,126 @@ class TestDataDirMigration:
         assert (dst / "config.json").exists()
 
 
+class TestCORSAndOllamaDiscovery:
+    """Verifies that CORSMiddleware is outermost (wrapping 401s) and /models/ollama honors base_url."""
+
+    def test_cors_middleware_is_outermost_and_401_works(self):
+        from starlette.middleware.cors import CORSMiddleware
+        from starlette.requests import Request
+        from backend.main import app, authenticate_request
+
+        # CORSMiddleware must be index 0 in user_middleware (outermost wrapper)
+        assert len(app.user_middleware) >= 2
+        assert app.user_middleware[0].cls is CORSMiddleware
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "path": "/models/ollama",
+            "raw_path": b"/models/ollama",
+            "query_string": b"",
+            "headers": [(b"origin", b"http://localhost:5173")],
+            "client": ("127.0.0.1", 50000),
+            "server": ("127.0.0.1", 8000),
+            "scheme": "http",
+        }
+        req = Request(scope)
+
+        async def _dummy_next(_req):
+            raise AssertionError("Should not reach route handler without token")
+
+        coro = authenticate_request(req, _dummy_next)
+        try:
+            coro.send(None)
+            raise AssertionError("Expected authenticate_request to complete without suspending")
+        except StopIteration as stop:
+            resp = stop.value
+
+        assert resp.status_code == 401
+
+    def test_ollama_endpoint_passes_base_url(self, monkeypatch):
+        import asyncio
+        from backend.main import get_ollama_status
+        from backend.model_router import ModelRouter
+
+        captured = {}
+
+        def fake_detect(base_url="http://localhost:11434"):
+            captured["base_url"] = base_url
+            return True, ["gpt-oss:120b-cloud"], f"Ollama connected at {base_url}"
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        monkeypatch.setattr(ModelRouter, "detect_ollama", staticmethod(fake_detect))
+        monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+        coro = get_ollama_status(base_url="http://127.0.0.1:11434")
+        try:
+            coro.send(None)
+            raise AssertionError("Expected get_ollama_status to complete without suspending")
+        except StopIteration as stop:
+            body = stop.value
+
+        assert body["running"] is True
+        assert body["models"] == ["gpt-oss:120b-cloud"]
+        assert body["base_url"] == "http://127.0.0.1:11434"
+        assert captured["base_url"] == "http://127.0.0.1:11434"
+
+
+class TestNvidiaNimProvider:
+    """Verifies NVIDIA NIM replaces GGUF in PROVIDER_CONFIGS and ModelRouter routes NIM requests."""
+
+    def test_provider_configs_has_nvidia_not_gguf(self):
+        from backend.config import PROVIDER_CONFIGS
+        assert "nvidia" in PROVIDER_CONFIGS
+        assert "gguf" not in PROVIDER_CONFIGS
+        assert PROVIDER_CONFIGS["nvidia"]["base_url"] == "https://integrate.api.nvidia.com/v1"
+        assert "nvidia/nemotron-3.5-lightning-30b-a3b" in PROVIDER_CONFIGS["nvidia"]["models"]
+
+    def test_nvidia_nim_get_llm_and_missing_key_error(self, monkeypatch):
+        from backend.model_router import ModelRouter
+        import backend.model_router as mr
+
+        monkeypatch.setattr(mr, "get_secret", lambda _k: "")
+        with pytest.raises(ValueError, match="NVIDIA NIM API key is missing"):
+            ModelRouter.get_llm({"provider": "nvidia"})
+
+        llm = ModelRouter.get_llm({
+            "provider": "nvidia",
+            "model_id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+            "api_key": "nvapi-test-key"
+        })
+        assert llm.model_name == "nvidia/nemotron-3.5-lightning-30b-a3b"
+        assert str(llm.openai_api_base).rstrip("/") == "https://integrate.api.nvidia.com/v1"
+        assert llm.request_timeout == 60.0
+
+    def test_nvidia_nim_test_connection_timeout_hint(self, monkeypatch):
+        from backend.model_router import ModelRouter
+        import backend.model_router as mr
+
+        captured = {}
+
+        class _FakeTimeoutLLM:
+            def invoke(self, _msgs):
+                raise RuntimeError("The read operation timed out")
+
+        def fake_get_llm(cfg):
+            captured.update(cfg)
+            return _FakeTimeoutLLM()
+
+        monkeypatch.setattr(mr.ModelRouter, "get_llm", staticmethod(fake_get_llm))
+        ok, msg = ModelRouter.test_connection({"provider": "nvidia", "model_id": "deepseek-ai/deepseek-v4.1-flash", "api_key": "nvapi-x"})
+        assert ok is False
+        assert captured["timeout"] == 45.0
+        assert captured["max_retries"] == 0
+        assert captured["streaming"] is False
+        assert captured["max_tokens"] == 16
+        assert "nemotron-3.5-lightning" in msg
+
+
+
 
 

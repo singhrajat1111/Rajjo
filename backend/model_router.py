@@ -221,6 +221,7 @@ class ModelRouter:
             "base_url": settings.get("custom_base_url", ""),
             "custom_base_url": settings.get("custom_base_url", ""),
             "ollama_base_url": settings.get("ollama_base_url", "http://localhost:11434"),
+            "nvidia_base_url": settings.get("nvidia_base_url", "https://integrate.api.nvidia.com/v1"),
             "gguf_model_path": settings.get("gguf_model_path", ""),
             "api_key": ""
         }
@@ -370,7 +371,27 @@ class ModelRouter:
                 }
             )
 
-        # 8. Universal API Accepter
+        # 8. NVIDIA NIM (Cloud build.nvidia.com or Self-Hosted NIM)
+        elif provider in ("nvidia", "nvidia_nim", "nim"):
+            api_key = cfg.get("api_key") or get_secret("NVIDIA_API_KEY")
+            if not api_key:
+                raise ValueError("NVIDIA NIM API key is missing. Please configure your nvapi-... key in Models or Settings.")
+            raw_url = cfg.get("base_url") or cfg.get("nvidia_base_url") or "https://integrate.api.nvidia.com/v1"
+            base_url = ModelRouter.normalize_base_url(raw_url) or "https://integrate.api.nvidia.com/v1"
+            chat_kwargs = {
+                "model": model_id or "nvidia/nemotron-3.5-lightning-30b-a3b",
+                "api_key": api_key,
+                "base_url": base_url,
+                "temperature": 0.3,
+                "streaming": bool(cfg.get("streaming", True)),
+                "timeout": float(cfg.get("timeout", 60.0)),
+                "max_retries": int(cfg.get("max_retries", 1)),
+            }
+            if "max_tokens" in cfg and cfg["max_tokens"]:
+                chat_kwargs["max_tokens"] = int(cfg["max_tokens"])
+            return ChatOpenAI(**chat_kwargs)
+
+        # 9. Universal API Accepter
         else:
             api_key = cfg.get("api_key") or get_secret("CUSTOM_API_KEY") or "none"
             raw_url = cfg.get("base_url") or cfg.get("custom_base_url") or "http://localhost:1234/v1"
@@ -465,6 +486,20 @@ class ModelRouter:
                 settings = load_settings()
                 _, mlist, _ = ModelRouter.detect_ollama(settings.get("ollama_base_url", "http://localhost:11434"))
                 models = mlist
+
+            elif provider == "nvidia":
+                key = get_secret("NVIDIA_API_KEY")
+                settings = load_settings()
+                raw_url = settings.get("nvidia_base_url") or "https://integrate.api.nvidia.com/v1"
+                base_url = (ModelRouter.normalize_base_url(raw_url) or "https://integrate.api.nvidia.com/v1").rstrip("/")
+                headers = {"User-Agent": "Rajjo/2.0"}
+                if key:
+                    headers["Authorization"] = f"Bearer {key}"
+                req = urllib.request.Request(f"{base_url}/models", headers=headers)
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    models = [m.get("id") for m in data.get("data", []) if m.get("id")]
+                    models.sort()
 
         except Exception as e:
             print(f"[ModelRouter] Notice fetching dynamic models for {provider}: {e}")
@@ -565,12 +600,25 @@ class ModelRouter:
     @staticmethod
     def test_connection(config: Dict[str, Any]) -> Tuple[bool, str]:
         try:
-            llm = ModelRouter.get_llm(config)
+            test_cfg = {**(config or {})}
+            test_cfg.setdefault("timeout", float(config.get("timeout", 45.0)))
+            test_cfg.setdefault("max_retries", 0)
+            test_cfg.setdefault("streaming", False)
+            test_cfg.setdefault("max_tokens", 16)
+            llm = ModelRouter.get_llm(test_cfg)
             test_prompt = [HumanMessage(content="Respond with 'Rajjo is online' in 5 words or less.")]
             resp = llm.invoke(test_prompt)
-            content = getattr(resp, "content", str(resp))
-            return True, f"Connection successful! Model response: {content[:100]}"
+            content = getattr(resp, "content", "") or ""
+            if not content:
+                content = getattr(resp, "additional_kwargs", {}).get("reasoning_content", "") or str(resp)
+            return True, f"Connection successful! Model response: {content[:120]}"
         except Exception as e:
-            return False, f"Connection failed: {str(e)}"
+            err_msg = str(e)
+            if (config or {}).get("provider") in ("nvidia", "nvidia_nim", "nim"):
+                if "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
+                    err_msg += " (Hosted DeepSeek models on NVIDIA NIM can take 20–40s due to cold containers or queue load. Try 'nvidia/nemotron-3.5-lightning-30b-a3b' or 'nvidia/nemotron-3.5-bolt-e4b' for instant <1s responses, or click 'Set as Active Model' to use it in Chat.)"
+                elif "404" in err_msg or "410" in err_msg:
+                    err_msg += " (This NIM model ID is unavailable or retired for your account — try scanning NIM models or selecting 'nvidia/nemotron-3.5-lightning-30b-a3b'.)"
+            return False, f"Connection failed: {err_msg}"
 
 router = ModelRouter()
